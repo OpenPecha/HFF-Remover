@@ -3,18 +3,29 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "project_name"
-version = "0.0.1"
+name = "hff-remover"
+version = "0.1.0"
 authors = [
   { name="OpenPecha", email="dev@openpecha.org" },
 ]
-description = "A small example package"
+description = "Remove headers, footers, and footnotes from scanned book images using DocLayout-YOLO"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+]
+dependencies = [
+    "doclayout-yolo>=0.0.2",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "opencv-python>=4.8.0",
+    "Pillow>=10.0.0",
+    "tqdm>=4.66.0",
+    "huggingface-hub>=0.20.0",
+    "paddleocr==2.9.0",
+    "paddlepaddle==3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +35,12 @@ dev = [
     "pre-commit",
 ]
 
+[project.scripts]
+hff-remover = "hff_remover.cli:main"
 
 [project.urls]
-"Homepage" = "https://github.com/OpenPecha/openpecha-project-template"
-"Bug Tracker" = "https://github.com/OpenPecha/openpecha-project-template/issues"
+"Homepage" = "https://github.com/OpenPecha/HFF-Remover"
+"Bug Tracker" = "https://github.com/OpenPecha/HFF-Remover/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]

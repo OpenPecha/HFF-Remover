@@ -1,6 +1,4 @@
-# README
-
-> **Note:** This readme template is based on one from the [Good Docs Project](https://thegooddocsproject.dev). You can find it and a guide to filling it out [here](https://gitlab.com/tgdp/templates/-/tree/main/readme). (_Erase this note after filling out the readme._)
+# HFF Remover
 
 <h1 align="center">
   <br>
@@ -8,141 +6,183 @@
   <br>
 </h1>
 
-## _Project Name_
-_The project name should match its code's capability so that new users can easily understand what it does._
+Remove **H**eaders, **F**ooters, and **F**ootnotes from scanned book images using DocLayout-YOLO.
 
-## Owner(s)
+## Overview
 
-_Change to the owner(s) of the new repo. (This template's owners are:)_
-- [@ngawangtrinley](https://github.com/ngawangtrinley)
-- [@mikkokotila](https://github.com/mikkokotila)
-- [@evanyerburgh](https://github.com/evanyerburgh)
+HFF Remover is a Python package that uses the [DocLayout-YOLO](https://github.com/opendatalab/DocLayout-YOLO) model to automatically detect and mask headers, footers, and footnotes in scanned book images. It's designed to process large batches of images (200K+) efficiently using GPU acceleration.
 
+## Features
 
-## Table of contents
-<p align="center">
-  <a href="#project-description">Project description</a> •
-  <a href="#who-this-project-is-for">Who this project is for</a> •
-  <a href="#project-dependencies">Project dependencies</a> •
-  <a href="#instructions-for-use">Instructions for use</a> •
-  <a href="#contributing-guidelines">Contributing guidelines</a> •
-  <a href="#additional-documentation">Additional documentation</a> •
-  <a href="#how-to-get-help">How to get help</a> •
-  <a href="#terms-of-use">Terms of use</a>
-</p>
-<hr>
+- **Automatic Detection**: Uses DocLayout-YOLO to detect document layout elements
+- **Batch Processing**: Process thousands of images with GPU acceleration
+- **Resumable**: Checkpoint support for interruption recovery
+- **Mixed Formats**: Supports JPEG, PNG, TIFF, BMP, and WebP
+- **Configurable**: Adjustable confidence thresholds, padding, and output quality
+- **CLI & API**: Both command-line and Python API interfaces
 
-## Project description
-_Use one of these:_
+## Installation
 
-With _Project Name_ you can _verb_ _noun_...
+```bash
+# Clone the repository
+git clone https://github.com/OpenPecha/HFF-Remover.git
+cd HFF-Remover
 
-_Project Name_ helps you _verb_ _noun_...
+# Install in development mode
+pip install -e ".[dev]"
+```
 
+### Requirements
 
-## Who this project is for
-This project is intended for _target user_ who wants to _user objective_.
+- Python >= 3.8
+- CUDA-capable GPU (recommended for large batches)
+- PyTorch >= 2.0.0
 
+## Quick Start
 
-## Project dependencies
-Before using _Project Name_, ensure you have:
-* python _version_
-* _Prerequisite 2_
-* _Prerequisite 3..._
+### Command Line
 
+```bash
+# Process all images in a directory
+hff-remover process /path/to/images --output /path/to/output
 
-## Instructions for use
-Get started with _Project Name_ by _(write the first step a user needs to start using the project. Use a verb to start.)_.
+# Process with GPU and custom settings
+hff-remover process /path/to/images --output /path/to/output \
+    --device cuda \
+    --batch-size 32 \
+    --confidence 0.5 \
+    --padding 5
 
+# Resume interrupted processing
+hff-remover process /path/to/images --output /path/to/output --resume
 
-### Install _Project Name_
-1. _Write the step here._ 
+# Process a single image
+hff-remover single input.jpg output.jpg
 
-    _Explanatory text here_ 
-    
-    _(Optional: Include a code sample or screenshot that helps your users complete this step.)_
+# Just detect without masking (view coordinates)
+hff-remover detect input.jpg
+```
 
-2. _Write the step here._
- 
-    a. _Substep 1_ 
-    
-    b. _Substep 2_
+### Python API
 
+```python
+from hff_remover import HFFDetector, HFFProcessor, BatchProcessor
 
-### Configure _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+# Initialize components
+detector = HFFDetector(device="cuda", confidence_threshold=0.5)
+processor = HFFProcessor(padding=5)
 
+# Process a single image
+from hff_remover.utils import load_image, save_image
 
-### Run _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+image = load_image("input.jpg")
+detections = detector.detect(image)
+result = processor.mask_regions(image, detections)
+save_image(result, "output.jpg")
 
+# Batch processing
+batch_processor = BatchProcessor(
+    detector=detector,
+    processor=processor,
+    batch_size=32,
+)
 
-### Troubleshoot _Project Name_
-1. _Write the step here._
-2. _Write the step here._
+stats = batch_processor.process_directory(
+    input_dir="/path/to/images",
+    output_dir="/path/to/output",
+    resume=True,
+)
 
-<table>
-  <tr>
-   <td>
-    Issue
-   </td>
-   <td>
-    Solution
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-  <tr>
-   <td>
-    _Describe the issue here_
-   </td>
-   <td>
-    _Write solution here_
-   </td>
-  </tr>
-</table>
+print(f"Processed {stats.processed_images} images")
+print(f"Speed: {stats.images_per_second:.1f} images/sec")
+```
 
+## CLI Reference
 
-Other troubleshooting supports:
-* _Link to FAQs_
-* _Link to runbooks_
-* _Link to other relevant support information_
+### `hff-remover process`
 
+Process all images in a directory.
 
-## Contributing guidelines
-If you'd like to help out, check out our [contributing guidelines](/CONTRIBUTING.md).
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--output, -o` | Required | Output directory |
+| `--device` | `cuda` | Device for inference (`cuda` or `cpu`) |
+| `--batch-size` | `8` | Images per batch |
+| `--confidence` | `0.5` | Minimum detection confidence |
+| `--padding` | `0` | Extra pixels around detected regions |
+| `--image-size` | `1024` | Model input size |
+| `--quality` | `95` | Output image quality (0-100) |
+| `--resume` | `false` | Resume from checkpoint |
+| `--no-recursive` | `false` | Don't search subdirectories |
 
+### `hff-remover single`
 
-## Additional documentation
-_Include links and brief descriptions to additional documentation._
+Process a single image.
 
-For more information:
-* [Reference link 1](#)
-* [Reference link 2](#)
-* [Reference link 3](#)
+```bash
+hff-remover single input.jpg output.jpg --device cuda
+```
 
+### `hff-remover detect`
 
-## How to get help
-* File an issue.
-* Email us at openpecha[at]gmail.com.
-* Join our [discord](https://discord.com/invite/7GFpPFSTeA).
+Detect HFF regions without masking.
 
+```bash
+hff-remover detect input.jpg --output detections.json
+```
 
-## Terms of use
-_Project Name_ is licensed under the [MIT License](/LICENSE.md).
+## Detection Classes
+
+DocLayout-YOLO detects the following document elements. HFF Remover targets:
+
+| Class | Name | Description |
+|-------|------|-------------|
+| 2 | abandon | Headers, footers, page numbers |
+| 7 | table_footnote | Footnotes in tables |
+
+## Performance
+
+On a modern GPU (NVIDIA V100/T4):
+
+- **Speed**: 50-100 images/second
+- **200K images**: ~30-60 minutes
+
+For best performance:
+- Use SSD storage for faster I/O
+- Increase batch size based on GPU memory
+- Use multiple I/O workers (`--io-workers`)
+
+## Cloud Deployment
+
+For processing large batches on cloud GPUs:
+
+```bash
+# AWS/GCP with NVIDIA GPU
+hff-remover process /data/images --output /data/output \
+    --device cuda \
+    --batch-size 64 \
+    --io-workers 8 \
+    --checkpoint-interval 1000
+```
+
+## Development
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=hff_remover
+```
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Acknowledgments
+
+- [DocLayout-YOLO](https://github.com/opendatalab/DocLayout-YOLO) for the document layout model
+- [OpenPecha](https://openpecha.org) for supporting this project
