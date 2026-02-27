@@ -65,12 +65,14 @@ DOCLAYOUT_YOLO_CLASS_NAMES = {
     9: "formula_caption",
 }
 
-# Classes we want to detect and remove (Header, Footer, Footnote)
+# Classes we want to detect (Header, Footer, Footnote, Text)
 # In DocLayout-YOLO, "abandon" (class 2) represents headers/footers/page numbers
 # "table_footnote" (class 7) represents footnotes in tables
+# "plain_text" (class 1) represents text areas / body text
 DOCLAYOUT_YOLO_HFF_CLASSES = {
-    2: "abandon",  # Headers, footers, page numbers
-    7: "table_footnote",  # Table footnotes
+    1: "plain_text",     # Text area / body text
+    2: "abandon",        # Headers, footers, page numbers
+    7: "table_footnote", # Table footnotes
 }
 
 
@@ -82,6 +84,8 @@ class HFFDetector(BaseHFFDetector):
         model_path: Optional[str] = None,
         device: str = "cuda",
         confidence_threshold: float = 0.5,
+        header_region_ratio: float = 0.33,
+        footer_region_ratio: float = 0.67,
     ):
         """
         Initialize the HFF detector.
@@ -97,6 +101,13 @@ class HFFDetector(BaseHFFDetector):
 
         self.device = device
         self.confidence_threshold = confidence_threshold
+        self.header_region_ratio = header_region_ratio
+        self.footer_region_ratio = footer_region_ratio
+
+        if not (0.0 <= self.header_region_ratio <= 1.0) or not (0.0 <= self.footer_region_ratio <= 1.0):
+            raise ValueError("header_region_ratio and footer_region_ratio must be within [0, 1]")
+        if self.header_region_ratio >= self.footer_region_ratio:
+            raise ValueError("header_region_ratio must be < footer_region_ratio")
 
         if model_path is None:
             # Download model from HuggingFace Hub
@@ -107,6 +118,124 @@ class HFFDetector(BaseHFFDetector):
 
         self.model = YOLOv10(model_path)
         self.model_path = model_path
+
+    def _get_image_height(self, image: Union[str, Path, np.ndarray]) -> Optional[int]:
+        """Best-effort extraction of image height for positional labeling."""
+        if isinstance(image, np.ndarray):
+            return int(image.shape[0])
+        try:
+            import cv2
+            img_arr = cv2.imread(str(image))
+            if img_arr is None:
+                return None
+            return int(img_arr.shape[0])
+        except Exception:
+            return None
+
+    def _doclayout_to_hff_detection(
+        self,
+        class_id: int,
+        bbox: List[float],
+        confidence: float,
+        image_height: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        """Convert DocLayout-YOLO box into an HFF detection dict, or None to ignore."""
+        # Keep plain_text / text area (class 1)
+        if class_id == 1:
+            return {
+                "bbox": bbox,
+                "class_id": class_id,
+                "class_name": "text",
+                "confidence": confidence,
+            }
+
+        # Keep table_footnote (class 7)
+        if class_id == 7:
+            return {
+                "bbox": bbox,
+                "class_id": class_id,
+                "class_name": "table_footnote",
+                "confidence": confidence,
+            }
+
+        # Handle abandon (class 2) by position: header/footer/middle-ignore
+        if class_id == 2:
+            if image_height is None:
+                class_name: Optional[str] = "abandon"
+            else:
+                class_name = self._classify_abandon_by_position(bbox, image_height)
+            if class_name is None:
+                return None
+            return {
+                "bbox": bbox,
+                "class_id": class_id,
+                "class_name": class_name,
+                "confidence": confidence,
+            }
+
+        # Ignore all other classes
+        return None
+
+    def _get_result_image_height(self, result: Any, src: Union[str, Path, np.ndarray]) -> Optional[int]:
+        """Best-effort extraction of image height for a single prediction result."""
+        try:
+            if hasattr(result, "orig_shape") and result.orig_shape is not None:
+                return int(result.orig_shape[0])
+        except Exception:
+            pass
+        return self._get_image_height(src)
+
+    def _extract_hff_detections_from_boxes(
+        self,
+        boxes: Any,
+        image_height: Optional[int],
+    ) -> List[Dict[str, Any]]:
+        """Extract HFF detections from a DocLayout-YOLO boxes object."""
+        if boxes is None:
+            return []
+
+        detections: List[Dict[str, Any]] = []
+        for j in range(len(boxes)):
+            class_id = int(boxes.cls[j].item())
+            bbox = boxes.xyxy[j].cpu().numpy().tolist()
+            confidence = float(boxes.conf[j].item())
+
+            det = self._doclayout_to_hff_detection(
+                class_id=class_id,
+                bbox=bbox,
+                confidence=confidence,
+                image_height=image_height,
+            )
+            if det is not None:
+                detections.append(det)
+
+        return detections
+
+    def _classify_abandon_by_position(
+        self,
+        bbox_xyxy: List[float],
+        image_height: int,
+    ) -> Optional[str]:
+        """
+        For DocLayout-YOLO class_id=2 ("abandon"), decide whether it's a header/footer.
+
+        - If bbox vertical center is in top `header_region_ratio` of page -> "header"
+        - If bbox vertical center is in bottom `footer_region_ratio` of page -> "footer"
+        - Otherwise -> None (ignore)
+        """
+        if image_height <= 0:
+            return None
+
+        y1 = float(bbox_xyxy[1])
+        y2 = float(bbox_xyxy[3])
+        y_center = (y1 + y2) / 2.0
+        y_norm = y_center / float(image_height)
+
+        if y_norm <= self.header_region_ratio:
+            return "header"
+        if y_norm >= self.footer_region_ratio:
+            return "footer"
+        return None
 
     def detect(
         self,
@@ -136,7 +265,10 @@ class HFFDetector(BaseHFFDetector):
             verbose=False,
         )
 
-        detections = []
+        # Determine image height for positional header/footer labeling
+        image_height = self._get_image_height(image)
+
+        detections: List[Dict[str, Any]] = []
 
         for result in results:
             boxes = result.boxes
@@ -146,19 +278,17 @@ class HFFDetector(BaseHFFDetector):
             for i in range(len(boxes)):
                 class_id = int(boxes.cls[i].item())
 
-                # Only keep HFF classes (abandon and table_footnote)
-                if class_id not in DOCLAYOUT_YOLO_HFF_CLASSES:
-                    continue
-
                 bbox = boxes.xyxy[i].cpu().numpy().tolist()
                 confidence = boxes.conf[i].item()
 
-                detections.append({
-                    "bbox": bbox,
-                    "class_id": class_id,
-                    "class_name": DOCLAYOUT_YOLO_HFF_CLASSES[class_id],
-                    "confidence": confidence,
-                })
+                det = self._doclayout_to_hff_detection(
+                    class_id=class_id,
+                    bbox=bbox,
+                    confidence=float(confidence),
+                    image_height=image_height,
+                )
+                if det is not None:
+                    detections.append(det)
 
         return detections
 
@@ -193,28 +323,12 @@ class HFFDetector(BaseHFFDetector):
                 verbose=False,
             )
 
-            for result in results:
-                detections = []
-                boxes = result.boxes
-
-                if boxes is not None:
-                    for j in range(len(boxes)):
-                        class_id = int(boxes.cls[j].item())
-
-                        if class_id not in DOCLAYOUT_YOLO_HFF_CLASSES:
-                            continue
-
-                        bbox = boxes.xyxy[j].cpu().numpy().tolist()
-                        confidence = boxes.conf[j].item()
-
-                        detections.append({
-                            "bbox": bbox,
-                            "class_id": class_id,
-                            "class_name": DOCLAYOUT_YOLO_HFF_CLASSES[class_id],
-                            "confidence": confidence,
-                        })
-
-                all_detections.append(detections)
+            for idx, result in enumerate(results):
+                src = batch[idx]
+                image_height = self._get_result_image_height(result, src)
+                all_detections.append(
+                    self._extract_hff_detections_from_boxes(result.boxes, image_height)
+                )
 
         return all_detections
 
@@ -269,16 +383,20 @@ class HFFDetector(BaseHFFDetector):
 # PP-DocLayout-L Detector (PaddlePaddle)
 # =============================================================================
 
-# PP-DocLayout class mapping for HFF
+# PP-DocLayout class mapping for HFF + text
 # Reference: https://huggingface.co/PaddlePaddle/PP-DocLayout-L
 PP_DOCLAYOUT_HFF_CLASSES = {
     "header",
-    "footer", 
+    "footer",
     "footnote",
-    "footnotes",  # Alternative naming
+    "footnotes",       # Alternative naming
     "page_number",
     "page-header",
     "page-footer",
+    "text",            # Text area / body text
+    "plain text",      # Alternative naming
+    "plain_text",      # Alternative naming
+    "paragraph",       # Alternative naming
 }
 
 
@@ -419,12 +537,12 @@ class PPDocLayoutDetector(BaseHFFDetector):
 
         if label in ("header", "page_header"):
             return "header"
-        elif label in ("footer", "page_footer"):
+        elif label in ("footer", "page_footer", "page_number"):
             return "footer"
         elif label in ("footnote", "footnotes"):
             return "footnote"
-        elif label == "page_number":
-            return "page_number"
+        elif label in ("text", "plain_text", "paragraph"):
+            return "text"
 
         return label
 
@@ -443,6 +561,7 @@ class PPDocLayoutDetector(BaseHFFDetector):
         Returns:
             List of all detection dictionaries.
         """
+        _ = image_size  # kept for API compatibility
         import cv2
 
         # Load image if path provided
@@ -553,9 +672,9 @@ class EnsembleDetector(BaseHFFDetector):
         if self.merge_strategy == "union":
             # Merge overlapping boxes using NMS
             return self._non_max_suppression(all_detections)
-        elif self.merge_strategy == "intersection":
+        if self.merge_strategy == "intersection":
             # Only keep boxes detected by all detectors
-            # (simplified: just return union for now)
+            # (simplified: treat as union for now)
             return self._non_max_suppression(all_detections)
 
         return all_detections

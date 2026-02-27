@@ -10,6 +10,7 @@ from hff_remover.detector import (
 )
 from hff_remover.processor import HFFProcessor
 from hff_remover.batch import BatchProcessor
+from hff_remover.evaluate import evaluate, EvaluationResult
 
 __all__ = [
     "HFFDetector",
@@ -18,5 +19,7 @@ __all__ = [
     "BaseHFFDetector",
     "HFFProcessor",
     "BatchProcessor",
+    "evaluate",
+    "EvaluationResult",
     "__version__",
 ]

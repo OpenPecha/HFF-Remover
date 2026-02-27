@@ -74,10 +74,36 @@ class TestHFFDetector:
         detector = HFFDetector()
         detections = detector.detect(np.zeros((100, 100, 3), dtype=np.uint8))
 
-        # Should only return the "abandon" class (class_id 2)
+        # Should only return the header/footer/table_footnote classes
         assert len(detections) == 1
         assert detections[0]["class_id"] == 2
-        assert detections[0]["class_name"] == "abandon"
+        assert detections[0]["class_name"] == "header"
+
+    @patch("hff_remover.detector.hf_hub_download")
+    @patch("hff_remover.detector.YOLOv10")
+    def test_detect_ignores_middle_abandon(self, mock_yolo, mock_download):
+        """Test that abandon detections in the middle of the page are ignored."""
+        mock_download.return_value = "/path/to/model.pt"
+
+        # bbox with y-center at 50% of page height -> should be ignored
+        mock_boxes = MagicMock()
+        mock_boxes.__len__ = lambda self: 1
+        mock_boxes.cls = [MagicMock(item=lambda: 2)]
+        mock_boxes.xyxy = [
+            MagicMock(cpu=lambda: MagicMock(numpy=lambda: MagicMock(tolist=lambda: [10, 40, 50, 60])))
+        ]
+        mock_boxes.conf = [MagicMock(item=lambda: 0.9)]
+
+        mock_result = MagicMock()
+        mock_result.boxes = mock_boxes
+
+        mock_model = MagicMock()
+        mock_model.predict.return_value = [mock_result]
+        mock_yolo.return_value = mock_model
+
+        detector = HFFDetector()
+        detections = detector.detect(np.zeros((100, 100, 3), dtype=np.uint8))
+        assert detections == []
 
     @patch("hff_remover.detector.hf_hub_download")
     @patch("hff_remover.detector.YOLOv10")

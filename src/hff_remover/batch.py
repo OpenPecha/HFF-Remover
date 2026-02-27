@@ -14,7 +14,11 @@ from threading import Thread
 from tqdm import tqdm
 
 from hff_remover.detector import HFFDetector
-from hff_remover.processor import HFFProcessor
+from hff_remover.processor import (
+    HFFProcessor,
+    YOLOInferenceDatasetWriter,
+    MaskedInferenceImageWriter,
+)
 from hff_remover.utils import (
     find_images,
     load_image,
@@ -112,6 +116,7 @@ class BatchProcessor:
         self,
         detector: Optional[HFFDetector] = None,
         processor: Optional[HFFProcessor] = None,
+        inference_writer: Optional[object] = None,
         device: str = "cuda",
         confidence_threshold: float = 0.5,
         padding: int = 0,
@@ -137,6 +142,7 @@ class BatchProcessor:
             confidence_threshold=confidence_threshold,
         )
         self.processor = processor or HFFProcessor(padding=padding)
+        self.inference_writer = inference_writer
         self.batch_size = batch_size
         self.num_io_workers = num_io_workers
         self.checkpoint_interval = checkpoint_interval
@@ -328,13 +334,33 @@ class BatchProcessor:
                 for det in detections:
                     batch_stats["detections"] += 1
                     class_name = det.get("class_name", "")
-                    if class_name == "abandon":
-                        batch_stats["headers"] += 1  # abandon includes headers/footers
+                    if class_name == "header":
+                        batch_stats["headers"] += 1
+                    elif class_name == "footer":
+                        batch_stats["footers"] += 1
                     elif class_name == "table_footnote":
                         batch_stats["footnotes"] += 1
 
                 # Apply masking
                 processed = self.processor.mask_regions(image, detections)
+
+                # Optionally save inference images/labels
+                if self.inference_writer is not None:
+                    try:
+                        rel_path = path.relative_to(input_dir)
+                    except ValueError:
+                        rel_path = Path(path.name)
+
+                    use_masked = bool(getattr(self.inference_writer, "expects_masked_images", False))
+                    image_to_write = processed if use_masked else image
+                    try:
+                        self.inference_writer.write_sample(
+                            image=image_to_write,
+                            detections=detections,
+                            image_rel_path=rel_path,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to write inference sample for {path}: {e}")
 
                 # Queue for saving
                 output_path = get_output_path(path, input_dir, output_dir)
@@ -405,6 +431,19 @@ class BatchProcessor:
 
         # Apply masking
         processed = self.processor.mask_regions(image, detections)
+
+        # Optionally save inference images/labels
+        if self.inference_writer is not None:
+            use_masked = bool(getattr(self.inference_writer, "expects_masked_images", False))
+            image_to_write = processed if use_masked else image
+            try:
+                self.inference_writer.write_sample(
+                    image=image_to_write,
+                    detections=detections,
+                    image_rel_path=input_path.name,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write inference sample for {input_path}: {e}")
 
         result = {
             "image": processed,

@@ -8,7 +8,11 @@ from pathlib import Path
 from hff_remover import __version__
 from hff_remover.batch import BatchProcessor, generate_report
 from hff_remover.detector import HFFDetector
-from hff_remover.processor import HFFProcessor
+from hff_remover.processor import (
+    HFFProcessor,
+    YOLOInferenceDatasetWriter,
+    MaskedInferenceImageWriter,
+)
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -43,6 +47,9 @@ Examples:
 
   # Detect without masking (just show coordinates)
   hff-remover detect input.jpg
+
+  # Evaluate predictions against ground truth
+  hff-remover evaluate --gt-dir /path/to/gt/labels --pred-dir /path/to/pred/labels
 """,
     )
 
@@ -140,6 +147,23 @@ Examples:
         action="store_true",
         help="Enable verbose output",
     )
+    inference_group = process_parser.add_mutually_exclusive_group()
+    inference_group.add_argument(
+        "--save-inference-yolo",
+        action="store_true",
+        help="Save inference results as a YOLO-style dataset under --inference-dir",
+    )
+    inference_group.add_argument(
+        "--save-inference-masked",
+        action="store_true",
+        help="Save masked inference images under --inference-dir/images",
+    )
+    process_parser.add_argument(
+        "--inference-dir",
+        type=str,
+        default="inference_data",
+        help="Output directory for inference dataset (default: inference_data)",
+    )
 
     # Single image command
     single_parser = subparsers.add_parser(
@@ -198,6 +222,23 @@ Examples:
         action="store_true",
         help="Enable verbose output",
     )
+    inference_group = single_parser.add_mutually_exclusive_group()
+    inference_group.add_argument(
+        "--save-inference-yolo",
+        action="store_true",
+        help="Save inference results as a YOLO-style dataset under --inference-dir",
+    )
+    inference_group.add_argument(
+        "--save-inference-masked",
+        action="store_true",
+        help="Save masked inference images under --inference-dir/images",
+    )
+    single_parser.add_argument(
+        "--inference-dir",
+        type=str,
+        default="inference_data",
+        help="Output directory for inference dataset (default: inference_data)",
+    )
 
     # Detect command (detection only)
     detect_parser = subparsers.add_parser(
@@ -250,6 +291,62 @@ Examples:
         action="store_true",
         help="Enable verbose output",
     )
+    inference_group = detect_parser.add_mutually_exclusive_group()
+    inference_group.add_argument(
+        "--save-inference-yolo",
+        action="store_true",
+        help="Save this inference as a YOLO-style dataset under --inference-dir",
+    )
+    inference_group.add_argument(
+        "--save-inference-masked",
+        action="store_true",
+        help="Save masked inference image under --inference-dir/images",
+    )
+    detect_parser.add_argument(
+        "--inference-dir",
+        type=str,
+        default="inference_data",
+        help="Output directory for inference dataset (default: inference_data)",
+    )
+
+    # Evaluate command (mAP evaluation)
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help="Evaluate predictions against ground truth (mAP)",
+    )
+    evaluate_parser.add_argument(
+        "--gt-dir",
+        type=str,
+        required=True,
+        help="Directory containing ground-truth YOLO label files (.txt)",
+    )
+    evaluate_parser.add_argument(
+        "--pred-dir",
+        type=str,
+        required=True,
+        help="Directory containing prediction YOLO label files (.txt)",
+    )
+    evaluate_parser.add_argument(
+        "--class-names",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Ordered class names (e.g. text footer header). "
+             "Index position maps to class_id.",
+    )
+    evaluate_parser.add_argument(
+        "--iou-threshold",
+        type=float,
+        nargs="+",
+        default=None,
+        help="IoU threshold(s) for evaluation. "
+             "Defaults to COCO-style 0.50:0.05:0.95.",
+    )
+    evaluate_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose output",
+    )
 
     return parser
 
@@ -284,10 +381,17 @@ def cmd_process(args: argparse.Namespace) -> int:
         return 1
 
     processor = HFFProcessor(padding=args.padding)
+    if getattr(args, "save_inference_yolo", False):
+        inference_writer = YOLOInferenceDatasetWriter(args.inference_dir)
+    elif getattr(args, "save_inference_masked", False):
+        inference_writer = MaskedInferenceImageWriter(args.inference_dir)
+    else:
+        inference_writer = None
 
     batch_processor = BatchProcessor(
         detector=detector,
         processor=processor,
+        inference_writer=inference_writer,
         batch_size=args.batch_size,
         num_io_workers=args.io_workers,
         checkpoint_interval=args.checkpoint_interval,
@@ -350,10 +454,17 @@ def cmd_single(args: argparse.Namespace) -> int:
             confidence_threshold=args.confidence,
         )
         processor = HFFProcessor(padding=args.padding)
+        if getattr(args, "save_inference_yolo", False):
+            inference_writer = YOLOInferenceDatasetWriter(args.inference_dir)
+        elif getattr(args, "save_inference_masked", False):
+            inference_writer = MaskedInferenceImageWriter(args.inference_dir)
+        else:
+            inference_writer = None
 
         batch_processor = BatchProcessor(
             detector=detector,
             processor=processor,
+            inference_writer=inference_writer,
         )
 
         result = batch_processor.process_single(
@@ -424,10 +535,68 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 }, f, indent=2)
             logger.info(f"Detections saved to: {output_path}")
 
+        # Optionally save inference (either YOLO dataset or masked image)
+        if getattr(args, "save_inference_yolo", False) or getattr(args, "save_inference_masked", False):
+            from hff_remover.utils import load_image
+
+            image = load_image(input_path)
+
+            if getattr(args, "save_inference_yolo", False):
+                writer = YOLOInferenceDatasetWriter(args.inference_dir)
+                writer.write_sample(
+                    image=image,
+                    detections=detections,
+                    image_rel_path=input_path.name,
+                )
+            else:
+                # masked
+                processor = HFFProcessor(padding=0)
+                masked = processor.mask_regions(image, detections)
+                writer = MaskedInferenceImageWriter(args.inference_dir)
+                writer.write_sample(
+                    image=masked,
+                    detections=detections,
+                    image_rel_path=input_path.name,
+                )
+
+            logger.info(f"Inference saved under: {Path(args.inference_dir).resolve()}")
+
         return 0
 
     except Exception as e:
         logger.error(f"Detection failed: {e}")
+        return 1
+
+
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    """Handle evaluate command."""
+    from hff_remover.evaluate import evaluate, print_report
+
+    setup_logging(args.verbose)
+    logger = logging.getLogger(__name__)
+
+    gt_dir = Path(args.gt_dir)
+    pred_dir = Path(args.pred_dir)
+
+    # Build class_names mapping from ordered list
+    class_names = None
+    if args.class_names:
+        class_names = {i: name for i, name in enumerate(args.class_names)}
+
+    logger.info(f"Evaluating predictions: {pred_dir}")
+    logger.info(f"Against ground truth:   {gt_dir}")
+
+    try:
+        result = evaluate(
+            gt_dir=gt_dir,
+            pred_dir=pred_dir,
+            class_names=class_names,
+            iou_thresholds=args.iou_threshold,
+        )
+        print_report(result, class_names=class_names)
+        return 0
+    except (NotADirectoryError, FileNotFoundError) as exc:
+        logger.error(str(exc))
         return 1
 
 
@@ -446,6 +615,8 @@ def main() -> int:
         return cmd_single(args)
     elif args.command == "detect":
         return cmd_detect(args)
+    elif args.command == "evaluate":
+        return cmd_evaluate(args)
     else:
         parser.print_help()
         return 1
