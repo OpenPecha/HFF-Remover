@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from hff_remover.detector import HFFDetector, HFF_CLASSES, CLASS_NAMES
+from hff_remover.detector import (
+    HFFDetector,
+    HFF_CLASSES,
+    CLASS_NAMES,
+    SuryaLayoutDetector,
+)
 
 
 class TestHFFClasses:
@@ -177,3 +182,93 @@ class TestHFFDetector:
         # Check that predict was called with the confidence threshold
         call_kwargs = mock_model.predict.call_args[1]
         assert call_kwargs["conf"] == 0.7
+
+
+class TestSuryaLayoutDetector:
+    """Tests for SuryaLayoutDetector class."""
+
+    @patch("hff_remover.detector.LayoutPredictor")
+    @patch("hff_remover.detector.FoundationPredictor")
+    @patch("hff_remover.detector.surya_settings")
+    def test_detect_filters_hff_labels(
+        self,
+        mock_settings,
+        mock_foundation,
+        mock_layout,
+    ):
+        """Test that SuryaLayoutDetector only returns HFF labels."""
+        mock_settings.LAYOUT_MODEL_CHECKPOINT = "/path/to/layout.ckpt"
+
+        # Mock layout predictor instance and its return value
+        mock_layout_instance = MagicMock()
+        mock_layout.return_value = mock_layout_instance
+
+        # Two boxes: one Text, one Page-footer (HFF)
+        mock_layout_instance.return_value = [
+            {
+                "bboxes": [
+                    {
+                        "bbox": [0, 0, 100, 20],
+                        "label": "Text",
+                        "top_k": {"Text": 0.95},
+                    },
+                    {
+                        "bbox": [0, 900, 100, 1000],
+                        "label": "Page-footer",
+                        "top_k": {"Page-footer": 0.9},
+                    },
+                ]
+            }
+        ]
+
+        detector = SuryaLayoutDetector(confidence_threshold=0.5)
+
+        # Avoid real image loading
+        with patch.object(detector, "_load_image", return_value=MagicMock()):
+            detections = detector.detect("dummy.jpg")
+
+        assert len(detections) == 1
+        assert detections[0]["class_name"] == "footer"
+        assert detections[0]["class_id"] == "Page-footer"
+
+    @patch("hff_remover.detector.LayoutPredictor")
+    @patch("hff_remover.detector.FoundationPredictor")
+    @patch("hff_remover.detector.surya_settings")
+    def test_get_all_detections_returns_all_labels(
+        self,
+        mock_settings,
+        mock_foundation,
+        mock_layout,
+    ):
+        """Test that get_all_detections does not filter by HFF labels."""
+        mock_settings.LAYOUT_MODEL_CHECKPOINT = "/path/to/layout.ckpt"
+
+        mock_layout_instance = MagicMock()
+        mock_layout.return_value = mock_layout_instance
+
+        mock_layout_instance.return_value = [
+            {
+                "bboxes": [
+                    {
+                        "bbox": [0, 0, 100, 20],
+                        "label": "Text",
+                        "top_k": {"Text": 0.95},
+                    },
+                    {
+                        "bbox": [0, 900, 100, 1000],
+                        "label": "Page-footer",
+                        "top_k": {"Page-footer": 0.9},
+                    },
+                ]
+            }
+        ]
+
+        detector = SuryaLayoutDetector(confidence_threshold=0.5)
+
+        with patch.object(detector, "_load_image", return_value=MagicMock()):
+            detections = detector.get_all_detections("dummy.jpg")
+
+        # Both Text and Page-footer should be present
+        labels = {d["class_id"] for d in detections}
+        assert "Text" in labels
+        assert "Page-footer" in labels

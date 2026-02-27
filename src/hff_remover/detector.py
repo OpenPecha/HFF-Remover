@@ -5,6 +5,28 @@ from typing import List, Dict, Any, Optional, Union
 from abc import ABC, abstractmethod
 import numpy as np
 
+# Optional imports for Surya layout detector (set to None if unavailable)
+try:
+    from surya.foundation import FoundationPredictor  # type: ignore
+    from surya.layout import LayoutPredictor  # type: ignore
+    from surya.settings import settings as surya_settings  # type: ignore
+except Exception:  # ImportError and any runtime issues
+    FoundationPredictor = None  # type: ignore
+    LayoutPredictor = None  # type: ignore
+    surya_settings = None  # type: ignore
+
+# Optional alias for DocLayout-YOLO model (for tests/backward compatibility)
+try:  # pragma: no cover - exercised indirectly in tests via mocking
+    from doclayout_yolo import YOLOv10  # type: ignore
+except Exception:  # ImportError and others
+    YOLOv10 = None  # type: ignore
+
+# Optional alias for HuggingFace Hub download helper (for tests/backward compatibility)
+try:  # pragma: no cover - exercised indirectly in tests via mocking
+    from huggingface_hub import hf_hub_download  # type: ignore
+except Exception:  # ImportError and others
+    hf_hub_download = None  # type: ignore
+
 
 # =============================================================================
 # Base Detector Interface
@@ -92,8 +114,16 @@ class HFFDetector(BaseHFFDetector):
             device: Device to run inference on ('cuda' or 'cpu').
             confidence_threshold: Minimum confidence score for detections.
         """
-        from doclayout_yolo import YOLOv10
-        from huggingface_hub import hf_hub_download
+        # Use module-level aliases so tests can mock these symbols.
+        global YOLOv10, hf_hub_download
+
+        # Lazily import if not already available (for robustness).
+        if YOLOv10 is None:
+            from doclayout_yolo import YOLOv10 as _YOLOv10  # type: ignore
+            YOLOv10 = _YOLOv10  # type: ignore
+        if hf_hub_download is None:
+            from huggingface_hub import hf_hub_download as _hf_hub_download  # type: ignore
+            hf_hub_download = _hf_hub_download  # type: ignore
 
         self.device = device
         self.confidence_threshold = confidence_threshold
@@ -143,7 +173,8 @@ class HFFDetector(BaseHFFDetector):
             if boxes is None:
                 continue
 
-            for i in range(len(boxes)):
+            # Use the length of `boxes.cls` for robustness and better testability.
+            for i in range(len(boxes.cls)):
                 class_id = int(boxes.cls[i].item())
 
                 # Only keep HFF classes (abandon and table_footnote)
@@ -198,7 +229,8 @@ class HFFDetector(BaseHFFDetector):
                 boxes = result.boxes
 
                 if boxes is not None:
-                    for j in range(len(boxes)):
+                    # See comment in `detect` about using len(boxes.cls)
+                    for j in range(len(boxes.cls)):
                         class_id = int(boxes.cls[j].item())
 
                         if class_id not in DOCLAYOUT_YOLO_HFF_CLASSES:
@@ -485,6 +517,236 @@ class PPDocLayoutDetector(BaseHFFDetector):
             })
 
         return detections
+
+
+# =============================================================================
+# Surya Layout Detector
+# =============================================================================
+
+# Surya layout labels for header, footer, and footnotes.
+# Reference: https://github.com/datalab-to/surya (layout and reading order section)
+SURYA_LAYOUT_HFF_LABELS = {
+    "Page-header",
+    "Page-footer",
+    "Footnote",
+}
+
+
+class SuryaLayoutDetector(BaseHFFDetector):
+    """Detector for headers, footers, and footnotes using Surya layout model.
+
+    This uses the Surya layout predictor, which is language-agnostic and works
+    well for scanned documents in many scripts, including Tibetan.
+    """
+
+    def __init__(
+        self,
+        confidence_threshold: float = 0.5,
+        layout_checkpoint: Optional[str] = None,
+    ):
+        """
+        Initialize the Surya layout detector.
+
+        Args:
+            confidence_threshold: Minimum confidence score for detections.
+            layout_checkpoint: Optional custom checkpoint path for the layout model.
+                               If None, uses Surya's default LAYOUT_MODEL_CHECKPOINT.
+        """
+        if LayoutPredictor is None or FoundationPredictor is None:
+            raise ImportError(
+                "Surya is not available. Please install 'surya-ocr' to use SuryaLayoutDetector."
+            )
+
+        self.confidence_threshold = confidence_threshold
+
+        # Use Surya's default layout checkpoint if not provided
+        if layout_checkpoint is None:
+            if surya_settings is None:
+                raise RuntimeError(
+                    "Surya settings are not available and no layout_checkpoint was provided."
+                )
+            layout_checkpoint = surya_settings.LAYOUT_MODEL_CHECKPOINT
+
+        self.layout_checkpoint = layout_checkpoint
+
+        # Initialize Surya layout predictor
+        foundation = FoundationPredictor(checkpoint=layout_checkpoint)
+        self.model = LayoutPredictor(foundation)
+
+    def _load_image(self, image: Union[str, Path, np.ndarray]):
+        """Load input as a PIL image in RGB format."""
+        from PIL import Image
+
+        if isinstance(image, (str, Path)):
+            return Image.open(str(image)).convert("RGB")
+
+        if isinstance(image, np.ndarray):
+            # Handle grayscale or color arrays. Assume BGR channel order for 3-channel images.
+            if image.ndim == 2:
+                return Image.fromarray(image).convert("RGB")
+            if image.ndim == 3 and image.shape[2] in (3, 4):
+                # Convert BGR (OpenCV) to RGB
+                rgb = image[..., :3][:, :, ::-1]
+                return Image.fromarray(rgb)
+
+        raise TypeError(f"Unsupported image type for SuryaLayoutDetector: {type(image)}")
+
+    def _convert_page_predictions(
+        self,
+        page_prediction: Any,
+        filter_hff_only: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Convert a single page's Surya layout predictions into HFF detections.
+
+        Handles both dicts and Surya's pydantic LayoutResult objects.
+        """
+        # Surya >=0.17 returns a LayoutResult (pydantic BaseModel) with attribute access.
+        if hasattr(page_prediction, "bboxes"):
+            boxes = getattr(page_prediction, "bboxes") or []
+        elif isinstance(page_prediction, dict):
+            boxes = page_prediction.get("bboxes") or []
+        else:
+            boxes = []
+        detections: List[Dict[str, Any]] = []
+
+        for box in boxes:
+            # LayoutBox is a pydantic model; support both attribute and dict-style access
+            if hasattr(box, "label"):
+                label = box.label
+                top_k = box.top_k or {}
+                bbox = getattr(box, "bbox", None)
+            elif isinstance(box, dict):
+                label = box.get("label")
+                top_k = box.get("top_k") or {}
+                bbox = box.get("bbox")
+            else:
+                continue
+
+            # Surya stores confidences in the top_k dict keyed by label
+            score = float(top_k.get(label, 1.0)) if label is not None else 1.0
+
+            # Filter by confidence
+            if score < self.confidence_threshold:
+                continue
+
+            # Optionally keep only header/footer/footnote labels
+            if filter_hff_only and label not in SURYA_LAYOUT_HFF_LABELS:
+                continue
+
+            if not bbox or len(bbox) != 4:
+                continue
+
+            bbox = [float(x) for x in bbox]
+            normalized_label = self._normalize_label(str(label))
+
+            detections.append(
+                {
+                    "bbox": bbox,
+                    "class_id": label,
+                    "class_name": normalized_label,
+                    "confidence": score,
+                }
+            )
+
+        return detections
+
+    def _normalize_label(self, label: str) -> str:
+        """Normalize Surya layout labels to standard HFF names."""
+        label_lower = label.lower().replace("-", "_").replace(" ", "_")
+
+        if label_lower in ("page_header", "header"):
+            return "header"
+        if label_lower in ("page_footer", "footer"):
+            return "footer"
+        if label_lower == "footnote":
+            return "footnote"
+
+        return label_lower
+
+    def detect(
+        self,
+        image: Union[str, Path, np.ndarray],
+        image_size: int = 1024,
+    ) -> List[Dict[str, Any]]:
+        """
+        Detect headers, footers, and footnotes in an image using Surya layout.
+
+        Args:
+            image: Path to image file or numpy array.
+            image_size: Unused (kept for API compatibility).
+
+        Returns:
+            List of detection dictionaries with keys:
+                - bbox: [x1, y1, x2, y2] bounding box coordinates
+                - class_id: Original Surya label
+                - class_name: Normalized class name (header/footer/footnote)
+                - confidence: Confidence score
+        """
+        pil_image = self._load_image(image)
+
+        # Surya layout predictor expects a list of images
+        predictions = self.model([pil_image])
+        if not predictions:
+            return []
+
+        page_prediction = predictions[0]
+        return self._convert_page_predictions(page_prediction, filter_hff_only=True)
+
+    def detect_batch(
+        self,
+        images: List[Union[str, Path, np.ndarray]],
+        image_size: int = 1024,
+        batch_size: int = 8,
+    ) -> List[List[Dict[str, Any]]]:
+        """
+        Detect headers, footers, and footnotes in multiple images.
+
+        Args:
+            images: List of image paths or numpy arrays.
+            image_size: Unused (kept for API compatibility).
+            batch_size: Unused (Surya handles batching internally via env vars).
+
+        Returns:
+            List of detection lists, one per input image.
+        """
+        if not images:
+            return []
+
+        pil_images = [self._load_image(img) for img in images]
+        predictions = self.model(pil_images)
+
+        all_detections: List[List[Dict[str, Any]]] = []
+        for page_prediction in predictions:
+            page_detections = self._convert_page_predictions(
+                page_prediction, filter_hff_only=True
+            )
+            all_detections.append(page_detections)
+
+        return all_detections
+
+    def get_all_detections(
+        self,
+        image: Union[str, Path, np.ndarray],
+        image_size: int = 1024,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all layout detections from Surya (not just HFF).
+
+        Args:
+            image: Path to image file or numpy array.
+            image_size: Unused (kept for API compatibility).
+
+        Returns:
+            List of all detection dictionaries, including non-HFF layout elements.
+        """
+        pil_image = self._load_image(image)
+        predictions = self.model([pil_image])
+        if not predictions:
+            return []
+
+        page_prediction = predictions[0]
+        # Do not filter by HFF labels here
+        return self._convert_page_predictions(page_prediction, filter_hff_only=False)
 
 
 # =============================================================================
