@@ -641,22 +641,21 @@ class PPDocLayoutDetector(BaseHFFDetector):
 # Surya Layout Detector
 # =============================================================================
 
-# Surya layout labels for header, footer, footnotes, page_number (our standard HFF names).
-# We filter using normalized labels from _normalize_label (same as in PPDocLayoutDetector).
+# Surya layout labels we output (text, header, footer, footnote).
+# We filter using normalized labels from _normalize_label.
 SURYA_LAYOUT_HFF_LABELS = {
+    "text",
     "header",
     "footer",
     "footnote",
-    "page_number",
 }
 
-# YOLO format class IDs for saving (one .txt per image: "class_id cx cy w h" normalized 0-1)
-# 0=header, 1=footer, 2=footnote, 3=page_number
+# YOLO format class IDs (manager-specified): 0=text, 1=footer, 2=header, 3=footnote
 SURYA_HFF_CLASS_IDS = {
-    "header": 0,
+    "text": 0,
     "footer": 1,
-    "footnote": 2,
-    "page_number": 3,
+    "header": 2,
+    "footnote": 3,
 }
 SURYA_HFF_CLASS_NAMES = {v: k for k, v in SURYA_HFF_CLASS_IDS.items()}  # id -> name for data.yaml
 
@@ -681,7 +680,7 @@ def save_yolo_data_yaml(
     path_line = f"path: {Path(images_dir).resolve()}" if images_dir else "path: ."
     names_lines = "\n".join(f"  {i}: {class_names[i]}" for i in range(nc))
     yaml_content = f"""# YOLO dataset config (HFF classes from SuryaLayoutDetector)
-# class_id: 0=header, 1=footer, 2=footnote, 3=page_number
+# class_id: 0=text, 1=footer, 2=header, 3=footnote
 
 {path_line}
 train: .
@@ -695,26 +694,72 @@ names:
     Path(output_path).write_text(yaml_content.strip() + "\n", encoding="utf-8")
 
 
+def merge_detections_by_class(
+    detections: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Combine all detections of the same class into one box per class (union bbox).
+
+    Args:
+        detections: List of dicts with "bbox" [x1,y1,x2,y2] and "class_name".
+
+    Returns:
+        One detection per class_name with bbox = union of all bboxes for that class.
+    """
+    by_class: Dict[str, List[Dict[str, Any]]] = {}
+    for det in detections:
+        bbox = det.get("bbox")
+        class_name = det.get("class_name", "")
+        if not bbox or len(bbox) != 4:
+            continue
+        if class_name not in by_class:
+            by_class[class_name] = []
+        by_class[class_name].append(det)
+
+    merged = []
+    for class_name, group in by_class.items():
+        x1 = min(d["bbox"][0] for d in group)
+        y1 = min(d["bbox"][1] for d in group)
+        x2 = max(d["bbox"][2] for d in group)
+        y2 = max(d["bbox"][3] for d in group)
+        best = max(group, key=lambda d: d.get("confidence", 0.0))
+        merged.append({
+            "bbox": [x1, y1, x2, y2],
+            "class_name": class_name,
+            "class_id": best.get("class_id"),
+            "confidence": best.get("confidence"),
+        })
+    return merged
+
+
 def save_detections_yolo_format(
     detections: List[Dict[str, Any]],
     image_path: Union[str, Path],
     output_path: Union[str, Path],
     class_name_to_id: Optional[Dict[str, int]] = None,
+    merge_same_class: bool = True,
 ) -> None:
     """
     Save detections to a file in YOLO format: one line per box,
     "class_id cx cy w h" (space-separated, normalized 0-1).
+
+    When merge_same_class is True, all boxes of the same class are combined
+    into one union bounding box per class before saving.
 
     Args:
         detections: List of dicts with "bbox" [x1,y1,x2,y2] and "class_name".
         image_path: Path to the image (used to read width/height for normalization).
         output_path: Path to the .txt file to write.
         class_name_to_id: Map class_name -> integer. Defaults to SURYA_HFF_CLASS_IDS.
+        merge_same_class: If True, merge all same-class boxes into one per class.
     """
     from PIL import Image
 
     if class_name_to_id is None:
         class_name_to_id = SURYA_HFF_CLASS_IDS
+
+    if merge_same_class:
+        detections = merge_detections_by_class(detections)
 
     with Image.open(str(image_path)) as im:
         img_w, img_h = im.size
@@ -866,10 +911,17 @@ class SuryaLayoutDetector(BaseHFFDetector):
 
             bbox = [float(x) for x in bbox]
 
+            # YOLO-style: numeric class_id (0=header, 1=footer, 2=footnote, 3=page_number) for HFF
+            class_id = (
+                SURYA_HFF_CLASS_IDS[normalized_label]
+                if normalized_label in SURYA_HFF_CLASS_IDS
+                else label
+            )
+
             detections.append(
                 {
                     "bbox": bbox,
-                    "class_id": label,
+                    "class_id": class_id,
                     "class_name": normalized_label,
                     "confidence": score,
                 }
@@ -889,8 +941,26 @@ class SuryaLayoutDetector(BaseHFFDetector):
             return "footnote"
         elif label in ("page_number", "pagenumber"):
             return "page_number"
+        elif label in ("text", "plain_text", "paragraph"):
+            return "text"
 
         return label
+
+    def save_results_yolo(
+        self,
+        detections: List[Dict[str, Any]],
+        image_path: Union[str, Path],
+        output_txt_path: Union[str, Path],
+        data_yaml_path: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """
+        Save detections in YOLO format (.txt) and create data.yaml (same as detector module helpers).
+        Uses save_detections_yolo_format and save_yolo_data_yaml from this module.
+        """
+        save_detections_yolo_format(detections, image_path, output_txt_path)
+        if data_yaml_path is None:
+            data_yaml_path = Path(output_txt_path).parent / "data.yaml"
+        save_yolo_data_yaml(data_yaml_path, images_dir=Path(output_txt_path).parent)
 
     def detect(
         self,

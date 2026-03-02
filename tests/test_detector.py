@@ -79,10 +79,14 @@ class TestHFFDetector:
         detector = HFFDetector()
         detections = detector.detect(np.zeros((100, 100, 3), dtype=np.uint8))
 
-        # Should only return the header/footer/table_footnote classes
-        assert len(detections) == 1
-        assert detections[0]["class_id"] == 2
-        assert detections[0]["class_name"] == "header"
+        # Should return HFF classes only: abandon(2)->header (top third) and plain_text(1)->text
+        assert len(detections) == 2
+        class_names = {d["class_name"] for d in detections}
+        assert "header" in class_names
+        assert "text" in class_names
+        class_ids = {d["class_id"] for d in detections}
+        assert 1 in class_ids
+        assert 2 in class_ids
 
     @patch("hff_remover.detector.hf_hub_download")
     @patch("hff_remover.detector.YOLOv10")
@@ -253,9 +257,14 @@ class TestSuryaLayoutDetector:
         with patch.object(detector, "_load_image", return_value=MagicMock()):
             detections = detector.detect("dummy.jpg")
 
-        assert len(detections) == 1
-        assert detections[0]["class_name"] == "footer"
-        assert detections[0]["class_id"] == "Page-footer"
+        # Both text and footer are output classes (0=text, 1=footer, 2=header, 3=footnote)
+        assert len(detections) == 2
+        names = {d["class_name"] for d in detections}
+        assert "text" in names
+        assert "footer" in names
+        by_name = {d["class_name"]: d for d in detections}
+        assert by_name["text"]["class_id"] == 0
+        assert by_name["footer"]["class_id"] == 1
 
     @patch("hff_remover.detector.LayoutPredictor")
     @patch("hff_remover.detector.FoundationPredictor")
@@ -294,7 +303,10 @@ class TestSuryaLayoutDetector:
         with patch.object(detector, "_load_image", return_value=MagicMock()):
             detections = detector.get_all_detections("dummy.jpg")
 
-        # Both Text and Page-footer should be present
-        labels = {d["class_id"] for d in detections}
-        assert "Text" in labels
-        assert "Page-footer" in labels
+        # Both text and footer should be present (class_id 0=text, 1=footer)
+        class_ids = {d["class_id"] for d in detections}
+        class_names = {d["class_name"] for d in detections}
+        assert 0 in class_ids
+        assert 1 in class_ids
+        assert "text" in class_names
+        assert "footer" in class_names
