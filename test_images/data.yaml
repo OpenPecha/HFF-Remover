@@ -1,0 +1,13 @@
+# YOLO dataset config (HFF classes from SuryaLayoutDetector)
+# class_id: 0=header, 1=footer, 2=footnote, 3=page_number
+
+path: D:\budhaghat\HFF-Remover\test_images
+train: .
+val: .
+
+nc: 4
+names:
+  0: header
+  1: footer
+  2: footnote
+  3: page_number

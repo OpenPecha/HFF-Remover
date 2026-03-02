@@ -523,13 +523,100 @@ class PPDocLayoutDetector(BaseHFFDetector):
 # Surya Layout Detector
 # =============================================================================
 
-# Surya layout labels for header, footer, and footnotes.
-# Reference: https://github.com/datalab-to/surya (layout and reading order section)
+# Surya layout labels for header, footer, footnotes, page_number (our standard HFF names).
+# We filter using normalized labels from _normalize_label (same as in PPDocLayoutDetector).
 SURYA_LAYOUT_HFF_LABELS = {
-    "Page-header",
-    "Page-footer",
-    "Footnote",
+    "header",
+    "footer",
+    "footnote",
+    "page_number",
 }
+
+# YOLO format class IDs for saving (one .txt per image: "class_id cx cy w h" normalized 0-1)
+# 0=header, 1=footer, 2=footnote, 3=page_number
+SURYA_HFF_CLASS_IDS = {
+    "header": 0,
+    "footer": 1,
+    "footnote": 2,
+    "page_number": 3,
+}
+SURYA_HFF_CLASS_NAMES = {v: k for k, v in SURYA_HFF_CLASS_IDS.items()}  # id -> name for data.yaml
+
+
+def save_yolo_data_yaml(
+    output_path: Union[str, Path],
+    class_names: Optional[Dict[int, str]] = None,
+    images_dir: Optional[Union[str, Path]] = None,
+) -> None:
+    """
+    Write a YOLO-style data.yaml (class names and optional path).
+    Use with the .txt label files from save_detections_yolo_format.
+
+    Args:
+        output_path: Where to write data.yaml (e.g. test_images/data.yaml).
+        class_names: Map class_id (int) -> name (str). Defaults to SURYA_HFF_CLASS_NAMES.
+        images_dir: Optional path to images directory for the 'path' key.
+    """
+    if class_names is None:
+        class_names = SURYA_HFF_CLASS_NAMES
+    nc = len(class_names)
+    path_line = f"path: {Path(images_dir).resolve()}" if images_dir else "path: ."
+    names_lines = "\n".join(f"  {i}: {class_names[i]}" for i in range(nc))
+    yaml_content = f"""# YOLO dataset config (HFF classes from SuryaLayoutDetector)
+# class_id: 0=header, 1=footer, 2=footnote, 3=page_number
+
+{path_line}
+train: .
+val: .
+
+nc: {nc}
+names:
+{names_lines}
+"""
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text(yaml_content.strip() + "\n", encoding="utf-8")
+
+
+def save_detections_yolo_format(
+    detections: List[Dict[str, Any]],
+    image_path: Union[str, Path],
+    output_path: Union[str, Path],
+    class_name_to_id: Optional[Dict[str, int]] = None,
+) -> None:
+    """
+    Save detections to a file in YOLO format: one line per box,
+    "class_id cx cy w h" (space-separated, normalized 0-1).
+
+    Args:
+        detections: List of dicts with "bbox" [x1,y1,x2,y2] and "class_name".
+        image_path: Path to the image (used to read width/height for normalization).
+        output_path: Path to the .txt file to write.
+        class_name_to_id: Map class_name -> integer. Defaults to SURYA_HFF_CLASS_IDS.
+    """
+    from PIL import Image
+
+    if class_name_to_id is None:
+        class_name_to_id = SURYA_HFF_CLASS_IDS
+
+    with Image.open(str(image_path)) as im:
+        img_w, img_h = im.size
+
+    lines = []
+    for det in detections:
+        bbox = det.get("bbox")
+        class_name = det.get("class_name", "")
+        if not bbox or len(bbox) != 4:
+            continue
+        x1, y1, x2, y2 = [float(x) for x in bbox]
+        cx = (x1 + x2) / 2.0 / img_w
+        cy = (y1 + y2) / 2.0 / img_h
+        w = (x2 - x1) / img_w
+        h = (y2 - y1) / img_h
+        cid = class_name_to_id.get(class_name, 0)
+        lines.append(f"{cid} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(output_path).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 class SuryaLayoutDetector(BaseHFFDetector):
@@ -613,31 +700,53 @@ class SuryaLayoutDetector(BaseHFFDetector):
             # LayoutBox is a pydantic model; support both attribute and dict-style access
             if hasattr(box, "label"):
                 label = box.label
-                top_k = box.top_k or {}
+                top_k = getattr(box, "top_k", None) or {}
                 bbox = getattr(box, "bbox", None)
+                polygon = getattr(box, "polygon", None)
+                box_confidence = getattr(box, "confidence", None)
             elif isinstance(box, dict):
                 label = box.get("label")
                 top_k = box.get("top_k") or {}
                 bbox = box.get("bbox")
+                polygon = box.get("polygon")
+                box_confidence = box.get("confidence")
             else:
                 continue
 
-            # Surya stores confidences in the top_k dict keyed by label
-            score = float(top_k.get(label, 1.0)) if label is not None else 1.0
+            # Prefer LayoutBox.confidence; else use top_k[label]
+            if box_confidence is not None:
+                score = float(box_confidence)
+            else:
+                score = float(top_k.get(label, 1.0)) if label is not None else 1.0
 
             # Filter by confidence
             if score < self.confidence_threshold:
                 continue
 
+            # Normalize first so we can filter by canonical names
+            normalized_label = self._normalize_label(str(label))
+
             # Optionally keep only header/footer/footnote labels
-            if filter_hff_only and label not in SURYA_LAYOUT_HFF_LABELS:
+            if filter_hff_only and normalized_label not in SURYA_LAYOUT_HFF_LABELS:
                 continue
 
+            # Derive bbox from polygon if bbox missing or wrong length (Surya LayoutBox often has polygon)
             if not bbox or len(bbox) != 4:
-                continue
+                if polygon and len(polygon) >= 3:
+                    flat = []
+                    for p in polygon:
+                        if isinstance(p, (list, tuple)) and len(p) >= 2:
+                            flat.extend([float(p[0]), float(p[1])])
+                        else:
+                            flat = []
+                            break
+                    if flat:
+                        xs, ys = flat[0::2], flat[1::2]
+                        bbox = [min(xs), min(ys), max(xs), max(ys)]
+                else:
+                    continue
 
             bbox = [float(x) for x in bbox]
-            normalized_label = self._normalize_label(str(label))
 
             detections.append(
                 {
@@ -651,17 +760,19 @@ class SuryaLayoutDetector(BaseHFFDetector):
         return detections
 
     def _normalize_label(self, label: str) -> str:
-        """Normalize Surya layout labels to standard HFF names."""
-        label_lower = label.lower().replace("-", "_").replace(" ", "_")
+        """Normalize Surya layout labels to our standard format (same as in HFF-Remover detector)."""
+        label = label.lower().replace("-", "_").replace(" ", "_")
 
-        if label_lower in ("page_header", "header"):
+        if label in ("header", "page_header", "pageheader"):
             return "header"
-        if label_lower in ("page_footer", "footer"):
+        elif label in ("footer", "page_footer", "pagefooter"):
             return "footer"
-        if label_lower == "footnote":
+        elif label in ("footnote", "footnotes"):
             return "footnote"
+        elif label in ("page_number", "pagenumber"):
+            return "page_number"
 
-        return label_lower
+        return label
 
     def detect(
         self,
