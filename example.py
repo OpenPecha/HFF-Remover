@@ -38,8 +38,27 @@ from hff_remover.detector import (
     EnsembleDetector,
     BaseHFFDetector,
 )
-from hff_remover.processor import HFFProcessor
+from hff_remover.processor import (
+    HFFProcessor,
+    YOLOInferenceDatasetWriter,
+    MaskedInferenceImageWriter,
+)
 from hff_remover.utils import load_image, save_image, find_images
+
+
+def create_inference_writer(
+    *,
+    save_inference_yolo: bool,
+    save_inference_masked: bool,
+    inference_dir: str,
+):
+    if save_inference_yolo and save_inference_masked:
+        raise ValueError("Choose only one: save_inference_yolo or save_inference_masked")
+    if save_inference_yolo:
+        return YOLOInferenceDatasetWriter(inference_dir)
+    if save_inference_masked:
+        return MaskedInferenceImageWriter(inference_dir)
+    return None
 
 
 def create_detector(
@@ -111,6 +130,8 @@ def process_directory(
     device: str = "cpu",
     confidence: float = 0.5,
     padding: int = 0,
+    output_format: str = "yolo",
+    inference_dir: Optional[str] = None,
 ) -> dict:
     """
     Process all images in a directory to remove headers, footers, and footnotes.
@@ -145,6 +166,22 @@ def process_directory(
     print(f"Loading model on {device}...")
     detector = create_detector(detector_type, device, confidence)
     processor = HFFProcessor(padding=padding)
+
+    # Default: keep inference output in the same directory as processed output
+    inference_dir = inference_dir or output_dir
+
+    output_format = (output_format or "").lower().strip()
+    if output_format not in {"masked", "yolo", "both"}:
+        raise ValueError("output_format must be one of: masked, yolo, both")
+
+    save_masked_output = output_format in {"masked", "both"}
+    save_inference_yolo = output_format in {"yolo", "both"}
+
+    inference_writer = create_inference_writer(
+        save_inference_yolo=save_inference_yolo,
+        save_inference_masked=False,
+        inference_dir=inference_dir,
+    )
     print("Model loaded successfully!")
 
     # Process statistics
@@ -157,7 +194,7 @@ def process_directory(
     }
 
     # Process each image with progress bar
-    print(f"\nProcessing images...")
+    print("\nProcessing images...")
     for image_path in tqdm(images, desc="Processing"):
         try:
             # Load image
@@ -170,12 +207,24 @@ def process_directory(
             # Mask detected regions with white
             result_image = processor.mask_regions(image, detections)
 
-            # Create output filename with rm_ prefix
-            output_filename = f"rm_{image_path.name}"
-            output_file_path = output_path / output_filename
+            # Optionally save YOLO inference dataset (uses original image)
+            if inference_writer is not None:
+                try:
+                    inference_writer.write_sample(
+                        image=image,
+                        detections=detections,
+                        image_rel_path=image_path.name,
+                    )
+                except Exception as e:
+                    print(f"\nWarning: failed to write inference sample for {image_path}: {e}")
 
-            # Save result
-            save_image(result_image, output_file_path)
+            if save_masked_output:
+                # Create output filename with rm_ prefix
+                output_filename = f"rm_{image_path.name}"
+                output_file_path = output_path / output_filename
+
+                # Save masked result
+                save_image(result_image, output_file_path)
             stats["processed"] += 1
 
         except Exception as e:
@@ -207,7 +256,7 @@ def main(input_dir: str, output_dir: str):
     #   "paddle"   - PP-DocLayout-L (higher precision, 23 classes)
     #   "ensemble" - Both detectors, merge results (best recall)
     #   "cascade"  - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "ensemble"
+    detector_type = "yolo"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cpu"
@@ -217,6 +266,9 @@ def main(input_dir: str, output_dir: str):
     
     # Padding around detected regions in pixels
     padding = 0
+
+    # Save inference as YOLO dataset
+    output_format = "masked"
     
     # ==========================================================================
 
@@ -228,6 +280,7 @@ def main(input_dir: str, output_dir: str):
         device=device,
         confidence=confidence,
         padding=padding,
+        output_format=output_format,
     )
 
     # Print summary
@@ -239,12 +292,12 @@ def main(input_dir: str, output_dir: str):
     print(f"  Total HFF detections: {stats['total_detections']}")
     
     if stats["failed_files"]:
-        print(f"\nFailed files:")
+        print("\nFailed files:")
         for f in stats["failed_files"]:
             print(f"  - {f}")
 
 
 if __name__ == "__main__":
-    input_dir = './data/input_images'    # Directory containing input images
-    output_dir = './data/output_images'  # Directory for output images
+    input_dir = './data/next'    # Directory containing input images
+    output_dir = './data/inference'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)
