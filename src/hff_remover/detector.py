@@ -145,7 +145,7 @@ class HFFDetector(BaseHFFDetector):
             return {
                 "bbox": bbox,
                 "class_id": class_id,
-                "class_name": "text",
+                "class_name": "text-area",
                 "confidence": confidence,
             }
 
@@ -154,7 +154,7 @@ class HFFDetector(BaseHFFDetector):
             return {
                 "bbox": bbox,
                 "class_id": class_id,
-                "class_name": "table_footnote",
+                "class_name": "footnote",
                 "confidence": confidence,
             }
 
@@ -542,7 +542,7 @@ class PPDocLayoutDetector(BaseHFFDetector):
         elif label in ("footnote", "footnotes"):
             return "footnote"
         elif label in ("text", "plain_text", "paragraph"):
-            return "text"
+            return "text-area"
 
         return label
 

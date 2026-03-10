@@ -1,4 +1,4 @@
-"""Mean Average Precision (mAP) evaluation for YOLO-format layout detection."""
+"""Mean Average Precision (mAP) evaluation for COCO-format layout detection."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ DEFAULT_IOU_THRESHOLDS: List[float] = [
 
 @dataclass
 class BoundingBox:
-    """A single YOLO-format bounding box.
+    """A single COCO-format bounding box.
 
     Attributes:
         class_id: Integer class label.
@@ -118,8 +118,8 @@ class EvaluationResult:
 # =============================================================================
 
 
-def parse_yolo_label_file(path: Path) -> List[BoundingBox]:
-    """Parse a YOLO-format label file into a list of bounding boxes.
+def parse_coco_label_file(path: Path) -> List[BoundingBox]:
+    """Parse a COCO-format label file into a list of bounding boxes.
 
     Each non-empty line must contain at least 5 space-separated values:
     ``class_id cx cy w h [confidence]``.  Lines that cannot be parsed are
@@ -179,7 +179,7 @@ def parse_yolo_label_file(path: Path) -> List[BoundingBox]:
 def compute_iou(box_a: BoundingBox, box_b: BoundingBox) -> float:
     """Compute Intersection-over-Union between two bounding boxes.
 
-    Both boxes are expected to be in normalised YOLO format.
+    Both boxes are expected to be in normalised COCO format.
 
     Args:
         box_a: First bounding box.
@@ -357,7 +357,7 @@ def evaluate(
     class_names: Optional[Dict[int, str]] = None,
     iou_thresholds: Optional[List[float]] = None,
 ) -> EvaluationResult:
-    """Evaluate predictions against ground truth in YOLO label format.
+    """Evaluate predictions against ground truth in COCO label format.
 
     Ground-truth and prediction directories must contain ``.txt`` files with
     matching stems.  Files present in only one directory are handled
@@ -406,10 +406,10 @@ def evaluate(
         pred_path = pred_dir / f"{stem}.txt"
 
         gt_boxes_per_image[stem] = (
-            parse_yolo_label_file(gt_path) if gt_path.exists() else []
+            parse_coco_label_file(gt_path) if gt_path.exists() else []
         )
         pred_boxes_per_image[stem] = (
-            parse_yolo_label_file(pred_path) if pred_path.exists() else []
+            parse_coco_label_file(pred_path) if pred_path.exists() else []
         )
 
     # Determine all class IDs present

@@ -7,7 +7,7 @@ from hff_remover.processor import (
     HFFProcessor,
     CLASS_OVERLAY_COLORS,
     DEFAULT_OVERLAY_COLOR,
-    YOLOInferenceDatasetWriter,
+    COCODatasetWriter,
     MaskedInferenceImageWriter,
 )
 
@@ -196,9 +196,9 @@ class TestHFFProcessor:
         assert result.shape == image.shape
 
 
-class TestYOLOInferenceDatasetWriter:
+class TestCOCODatasetWriter:
     def test_writes_image_label_and_data_yaml(self, tmp_path):
-        writer = YOLOInferenceDatasetWriter(base_dir=tmp_path / "inference_data")
+        writer = COCODatasetWriter(base_dir=tmp_path / "inference_data")
 
         image = np.zeros((100, 200, 3), dtype=np.uint8)  # h=100, w=200
         detections = [
@@ -217,7 +217,7 @@ class TestYOLOInferenceDatasetWriter:
 
         label_text = lbl_path.read_text(encoding="utf-8").strip().splitlines()
         assert len(label_text) == 1
-        # class id should start at 0
+        # header -> class id 0
         parts = label_text[0].split()
         assert parts[0] == "0"
         # xc=50/200=0.25, yc=25/100=0.25, w=100/200=0.5, h=50/100=0.5
@@ -228,11 +228,15 @@ class TestYOLOInferenceDatasetWriter:
 
         data_yaml = (tmp_path / "inference_data" / "data.yaml").read_text(encoding="utf-8")
         assert "path:" in data_yaml
+        assert "nc: 4" in data_yaml
         assert "names:" in data_yaml
-        assert "header" in data_yaml
+        assert '0: "header"' in data_yaml
+        assert '1: "text-area"' in data_yaml
+        assert '2: "footnote"' in data_yaml
+        assert '3: "footer"' in data_yaml
 
     def test_class_ids_are_consistent(self, tmp_path):
-        writer = YOLOInferenceDatasetWriter(base_dir=tmp_path / "inference_data")
+        writer = COCODatasetWriter(base_dir=tmp_path / "inference_data")
 
         image = np.zeros((10, 10, 3), dtype=np.uint8)
         writer.write_sample(
@@ -242,15 +246,16 @@ class TestYOLOInferenceDatasetWriter:
         )
         writer.write_sample(
             image=image,
-            detections=[{"bbox": [0, 0, 5, 5], "class_name": "table_footnote"}],
+            detections=[{"bbox": [0, 0, 5, 5], "class_name": "footnote"}],
             image_rel_path="b.jpg",
         )
 
         a_lbl = (tmp_path / "inference_data" / "labels" / "a.txt").read_text(encoding="utf-8").strip()
         b_lbl = (tmp_path / "inference_data" / "labels" / "b.txt").read_text(encoding="utf-8").strip()
 
+        # header=0, footnote=2 per COCO_CLASS_NAME_TO_ID
         assert a_lbl.split()[0] == "0"
-        assert b_lbl.split()[0] == "1"
+        assert b_lbl.split()[0] == "2"
 
 
 class TestMaskedInferenceImageWriter:

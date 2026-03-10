@@ -40,7 +40,7 @@ from hff_remover.detector import (
 )
 from hff_remover.processor import (
     HFFProcessor,
-    YOLOInferenceDatasetWriter,
+    COCODatasetWriter,
     MaskedInferenceImageWriter,
 )
 from hff_remover.utils import load_image, save_image, find_images
@@ -48,14 +48,14 @@ from hff_remover.utils import load_image, save_image, find_images
 
 def create_inference_writer(
     *,
-    save_inference_yolo: bool,
+    save_inference_coco: bool,
     save_inference_masked: bool,
     inference_dir: str,
 ):
-    if save_inference_yolo and save_inference_masked:
-        raise ValueError("Choose only one: save_inference_yolo or save_inference_masked")
-    if save_inference_yolo:
-        return YOLOInferenceDatasetWriter(inference_dir)
+    if save_inference_coco and save_inference_masked:
+        raise ValueError("Choose only one: save_inference_coco or save_inference_masked")
+    if save_inference_coco:
+        return COCODatasetWriter(inference_dir)
     if save_inference_masked:
         return MaskedInferenceImageWriter(inference_dir)
     return None
@@ -130,7 +130,7 @@ def process_directory(
     device: str = "cpu",
     confidence: float = 0.5,
     padding: int = 0,
-    output_format: str = "yolo",
+    output_format: str = "coco",
     inference_dir: Optional[str] = None,
 ) -> dict:
     """
@@ -171,14 +171,14 @@ def process_directory(
     inference_dir = inference_dir or output_dir
 
     output_format = (output_format or "").lower().strip()
-    if output_format not in {"masked", "yolo", "both"}:
-        raise ValueError("output_format must be one of: masked, yolo, both")
+    if output_format not in {"masked", "coco", "both"}:
+        raise ValueError("output_format must be one of: masked, coco, both")
 
     save_masked_output = output_format in {"masked", "both"}
-    save_inference_yolo = output_format in {"yolo", "both"}
+    save_inference_coco = output_format in {"coco", "both"}
 
     inference_writer = create_inference_writer(
-        save_inference_yolo=save_inference_yolo,
+        save_inference_coco=save_inference_coco,
         save_inference_masked=False,
         inference_dir=inference_dir,
     )
@@ -207,7 +207,7 @@ def process_directory(
             # Mask detected regions with white
             result_image = processor.mask_regions(image, detections)
 
-            # Optionally save YOLO inference dataset (uses original image)
+            # Optionally save COCO inference dataset (uses original image)
             if inference_writer is not None:
                 try:
                     inference_writer.write_sample(
@@ -267,8 +267,8 @@ def main(input_dir: str, output_dir: str):
     # Padding around detected regions in pixels
     padding = 0
 
-    # Save inference as YOLO dataset
-    output_format = "masked"
+    # Save inference as COCO dataset
+    output_format = "coco"
     
     # ==========================================================================
 
@@ -298,6 +298,6 @@ def main(input_dir: str, output_dir: str):
 
 
 if __name__ == "__main__":
-    input_dir = './data/next'    # Directory containing input images
+    input_dir = './data/images'    # Directory containing input images
     output_dir = './data/inference'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)

@@ -10,7 +10,7 @@ from hff_remover.batch import BatchProcessor, generate_report
 from hff_remover.detector import HFFDetector
 from hff_remover.processor import (
     HFFProcessor,
-    YOLOInferenceDatasetWriter,
+    COCODatasetWriter,
     MaskedInferenceImageWriter,
 )
 
@@ -149,9 +149,9 @@ Examples:
     )
     inference_group = process_parser.add_mutually_exclusive_group()
     inference_group.add_argument(
-        "--save-inference-yolo",
+        "--save-inference-coco",
         action="store_true",
-        help="Save inference results as a YOLO-style dataset under --inference-dir",
+        help="Save inference results as a COCO-style dataset under --inference-dir",
     )
     inference_group.add_argument(
         "--save-inference-masked",
@@ -224,9 +224,9 @@ Examples:
     )
     inference_group = single_parser.add_mutually_exclusive_group()
     inference_group.add_argument(
-        "--save-inference-yolo",
+        "--save-inference-coco",
         action="store_true",
-        help="Save inference results as a YOLO-style dataset under --inference-dir",
+        help="Save inference results as a COCO-style dataset under --inference-dir",
     )
     inference_group.add_argument(
         "--save-inference-masked",
@@ -293,9 +293,9 @@ Examples:
     )
     inference_group = detect_parser.add_mutually_exclusive_group()
     inference_group.add_argument(
-        "--save-inference-yolo",
+        "--save-inference-coco",
         action="store_true",
-        help="Save this inference as a YOLO-style dataset under --inference-dir",
+        help="Save this inference as a COCO-style dataset under --inference-dir",
     )
     inference_group.add_argument(
         "--save-inference-masked",
@@ -318,13 +318,13 @@ Examples:
         "--gt-dir",
         type=str,
         required=True,
-        help="Directory containing ground-truth YOLO label files (.txt)",
+        help="Directory containing ground-truth COCO label files (.txt)",
     )
     evaluate_parser.add_argument(
         "--pred-dir",
         type=str,
         required=True,
-        help="Directory containing prediction YOLO label files (.txt)",
+        help="Directory containing prediction COCO label files (.txt)",
     )
     evaluate_parser.add_argument(
         "--class-names",
@@ -381,8 +381,8 @@ def cmd_process(args: argparse.Namespace) -> int:
         return 1
 
     processor = HFFProcessor(padding=args.padding)
-    if getattr(args, "save_inference_yolo", False):
-        inference_writer = YOLOInferenceDatasetWriter(args.inference_dir)
+    if getattr(args, "save_inference_coco", False):
+        inference_writer = COCODatasetWriter(args.inference_dir)
     elif getattr(args, "save_inference_masked", False):
         inference_writer = MaskedInferenceImageWriter(args.inference_dir)
     else:
@@ -454,8 +454,8 @@ def cmd_single(args: argparse.Namespace) -> int:
             confidence_threshold=args.confidence,
         )
         processor = HFFProcessor(padding=args.padding)
-        if getattr(args, "save_inference_yolo", False):
-            inference_writer = YOLOInferenceDatasetWriter(args.inference_dir)
+        if getattr(args, "save_inference_coco", False):
+            inference_writer = COCODatasetWriter(args.inference_dir)
         elif getattr(args, "save_inference_masked", False):
             inference_writer = MaskedInferenceImageWriter(args.inference_dir)
         else:
@@ -535,14 +535,14 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 }, f, indent=2)
             logger.info(f"Detections saved to: {output_path}")
 
-        # Optionally save inference (either YOLO dataset or masked image)
-        if getattr(args, "save_inference_yolo", False) or getattr(args, "save_inference_masked", False):
+        # Optionally save inference (either COCO dataset or masked image)
+        if getattr(args, "save_inference_coco", False) or getattr(args, "save_inference_masked", False):
             from hff_remover.utils import load_image
 
             image = load_image(input_path)
 
-            if getattr(args, "save_inference_yolo", False):
-                writer = YOLOInferenceDatasetWriter(args.inference_dir)
+            if getattr(args, "save_inference_coco", False):
+                writer = COCODatasetWriter(args.inference_dir)
                 writer.write_sample(
                     image=image,
                     detections=detections,

@@ -16,7 +16,7 @@ from tqdm import tqdm
 from hff_remover.detector import HFFDetector
 from hff_remover.processor import (
     HFFProcessor,
-    YOLOInferenceDatasetWriter,
+    COCODatasetWriter,
     MaskedInferenceImageWriter,
 )
 from hff_remover.utils import (
@@ -338,7 +338,7 @@ class BatchProcessor:
                         batch_stats["headers"] += 1
                     elif class_name == "footer":
                         batch_stats["footers"] += 1
-                    elif class_name == "table_footnote":
+                    elif class_name == "footnote":
                         batch_stats["footnotes"] += 1
 
                 # Apply masking

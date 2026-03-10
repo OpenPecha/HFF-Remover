@@ -17,8 +17,7 @@ CLASS_OVERLAY_COLORS: Dict[str, Tuple[int, int, int]] = {
     "header":         (0, 255, 0),      # Green
     "footer":         (0, 0, 255),      # Blue
     "footnote":       (255, 0, 0),      # Red
-    "table_footnote": (255, 0, 0),      # Red (same as footnote)
-    "text":           (64, 64, 64),     # Dark grey
+    "text-area":      (64, 64, 64),     # Dark grey
 }
 
 # Fallback color if class_name is not in the map above
@@ -272,10 +271,19 @@ def _xyxy_to_yolo_xywh_norm(
     return clamp01(xc), clamp01(yc), clamp01(w), clamp01(h)
 
 
+# Canonical class mapping – must stay in sync with data.yaml
+COCO_CLASS_NAME_TO_ID: Dict[str, int] = {
+    "header": 0,
+    "text-area": 1,
+    "footnote": 2,
+    "footer": 3,
+}
+
+
 @dataclass
-class YOLOInferenceDatasetWriter:
+class COCODatasetWriter:
     """
-    Save inference as a YOLO-style dataset:
+    Save inference as a COCO-style dataset:
     - inference_data/images/<image>
     - inference_data/labels/<image_stem>.txt
     - inference_data/data.yaml
@@ -284,7 +292,6 @@ class YOLOInferenceDatasetWriter:
     base_dir: Union[str, Path] = "inference_data"
     images_subdir: str = "images"
     labels_subdir: str = "labels"
-    class_name_to_id: Dict[str, int] = field(default_factory=dict)
     expects_masked_images: bool = False
 
     def __post_init__(self) -> None:
@@ -295,35 +302,37 @@ class YOLOInferenceDatasetWriter:
         self.labels_dir.mkdir(parents=True, exist_ok=True)
         self.write_data_yaml()
 
-    def _ensure_class_id(self, class_name: str) -> int:
+    def _class_id_for(self, class_name: str) -> int:
+        """Return the fixed class id for *class_name*.
+
+        Raises:
+            ValueError: If the class name is not in the canonical mapping.
+        """
         class_name = str(class_name)
-        if class_name not in self.class_name_to_id:
-            self.class_name_to_id[class_name] = len(self.class_name_to_id)
-            self.write_data_yaml()
-        return self.class_name_to_id[class_name]
+        if class_name not in COCO_CLASS_NAME_TO_ID:
+            raise ValueError(
+                f"Unknown class name '{class_name}'. "
+                f"Expected one of {list(COCO_CLASS_NAME_TO_ID.keys())}"
+            )
+        return COCO_CLASS_NAME_TO_ID[class_name]
 
     def write_data_yaml(self) -> None:
-        """
-        Write/overwrite `data.yaml` with dataset path and current class ids.
-        """
+        """Write/overwrite ``data.yaml`` with dataset path and class names."""
         dataset_path = str(self.base_dir.resolve())
-        if self.class_name_to_id:
-            max_id = max(self.class_name_to_id.values())
-            names_list: List[str] = [""] * (max_id + 1)
-            for name, idx in self.class_name_to_id.items():
-                names_list[idx] = name
-        else:
-            names_list = []
 
-        lines: List[str] = []
-        lines.append(f"path: {dataset_path}")
-        lines.append(f"nc: {len(names_list)}")
-        lines.append("names:")
-        for i, name in enumerate(names_list):
-            safe = name.replace('\"', '\\\"')
-            lines.append(f"  {i}: \"{safe}\"")
+        lines: List[str] = [
+            f"path: {dataset_path}",
+            f"nc: {len(COCO_CLASS_NAME_TO_ID)}",
+            "names:",
+        ]
+        for class_id, class_name in sorted(
+            ((v, k) for k, v in COCO_CLASS_NAME_TO_ID.items())
+        ):
+            lines.append(f'  {class_id}: "{class_name}"')
 
-        (self.base_dir / "data.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (self.base_dir / "data.yaml").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
 
     def write_sample(
         self,
@@ -332,7 +341,7 @@ class YOLOInferenceDatasetWriter:
         image_rel_path: Union[str, Path],
     ) -> Tuple[Path, Path]:
         """
-        Save one image + its YOLO label file.
+        Save one image + its COCO label file.
 
         Label format per line:
             <class_id> <x_center> <y_center> <width> <height>
@@ -361,7 +370,7 @@ class YOLOInferenceDatasetWriter:
             if not class_name:
                 class_name = str(det.get("class_id", "unknown"))
 
-            class_id = self._ensure_class_id(str(class_name))
+            class_id = self._class_id_for(str(class_name))
             xc, yc, bw, bh = _xyxy_to_yolo_xywh_norm(list(map(float, bbox)), w, h)
             label_lines.append(f"{class_id} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
 

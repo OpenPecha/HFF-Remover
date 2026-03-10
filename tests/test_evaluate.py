@@ -14,7 +14,7 @@ from hff_remover.evaluate import (
     compute_iou,
     evaluate,
     match_predictions,
-    parse_yolo_label_file,
+    parse_coco_label_file,
     print_report,
 )
 
@@ -25,7 +25,7 @@ from hff_remover.evaluate import (
 
 
 def _write_label(directory: Path, stem: str, lines: list[str]) -> Path:
-    """Write a YOLO label file and return its path."""
+    """Write a COCO label file and return its path."""
     path = directory / f"{stem}.txt"
     path.write_text("\n".join(lines) + "\n")
     return path
@@ -46,12 +46,12 @@ def _box(
 
 
 # =============================================================================
-# TestParseYoloLabelFile
+# TestParseCOCOLabelFile
 # =============================================================================
 
 
-class TestParseYoloLabelFile:
-    """Tests for parse_yolo_label_file."""
+class TestParseCOCOLabelFile:
+    """Tests for parse_coco_label_file."""
 
     def test_valid_file(self) -> None:
         """Parse a well-formed label file with two boxes."""
@@ -61,7 +61,7 @@ class TestParseYoloLabelFile:
                 "img1",
                 ["0 0.5 0.5 0.8 0.8", "1 0.1 0.9 0.1 0.02"],
             )
-            boxes = parse_yolo_label_file(path)
+            boxes = parse_coco_label_file(path)
 
             assert len(boxes) == 2
             assert boxes[0].class_id == 0
@@ -75,7 +75,7 @@ class TestParseYoloLabelFile:
             path = _write_label(
                 Path(tmpdir), "img2", ["0 0.5 0.5 0.8 0.8 0.95"]
             )
-            boxes = parse_yolo_label_file(path)
+            boxes = parse_coco_label_file(path)
 
             assert len(boxes) == 1
             assert boxes[0].confidence == pytest.approx(0.95)
@@ -85,7 +85,7 @@ class TestParseYoloLabelFile:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "empty.txt"
             path.write_text("")
-            boxes = parse_yolo_label_file(path)
+            boxes = parse_coco_label_file(path)
 
             assert boxes == []
 
@@ -102,7 +102,7 @@ class TestParseYoloLabelFile:
                     "2 0.3 0.3 0.2 0.2",  # valid
                 ],
             )
-            boxes = parse_yolo_label_file(path)
+            boxes = parse_coco_label_file(path)
 
             assert len(boxes) == 2
             assert boxes[0].class_id == 0
@@ -111,7 +111,7 @@ class TestParseYoloLabelFile:
     def test_missing_file_raises(self) -> None:
         """A FileNotFoundError is raised for a non-existent path."""
         with pytest.raises(FileNotFoundError):
-            parse_yolo_label_file(Path("/nonexistent/file.txt"))
+            parse_coco_label_file(Path("/nonexistent/file.txt"))
 
     def test_blank_lines_ignored(self) -> None:
         """Blank and whitespace-only lines are silently skipped."""
@@ -121,7 +121,7 @@ class TestParseYoloLabelFile:
                 "img4",
                 ["", "  ", "0 0.5 0.5 0.2 0.2", ""],
             )
-            boxes = parse_yolo_label_file(path)
+            boxes = parse_coco_label_file(path)
 
             assert len(boxes) == 1
 
