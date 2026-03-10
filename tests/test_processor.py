@@ -163,23 +163,6 @@ class TestHFFProcessor:
 
         assert np.array_equal(image, original)
 
-    def test_get_clean_region_mask(self):
-        """Test clean region mask generation."""
-        processor = HFFProcessor()
-
-        detections = [
-            {"bbox": [0, 0, 50, 10], "confidence": 0.9},  # Header
-            {"bbox": [0, 90, 100, 100], "confidence": 0.9},  # Footer
-        ]
-
-        mask = processor.get_clean_region_mask((100, 100), detections)
-
-        # Detected regions should be 0
-        assert np.all(mask[0:10, 0:50] == 0)
-        assert np.all(mask[90:100, :] == 0)
-        # Clean regions should be 255
-        assert np.all(mask[20:80, :] == 255)
-
     def test_mask_regions_clamps_to_image_bounds(self):
         """Test that bounding boxes are clamped to image bounds."""
         processor = HFFProcessor(padding=20)

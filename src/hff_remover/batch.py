@@ -330,6 +330,9 @@ class BatchProcessor:
 
         for path, image, detections in zip(valid_paths, images, all_detections):
             try:
+                # Merge nearby same-class boxes before any downstream use
+                detections = self.processor.merge_nearby_detections(detections)
+
                 # Count detection types
                 for det in detections:
                     batch_stats["detections"] += 1
@@ -428,6 +431,9 @@ class BatchProcessor:
 
         # Detect HFF regions
         detections = self.detector.detect(image, image_size=image_size)
+
+        # Merge nearby same-class boxes before any downstream use
+        detections = self.processor.merge_nearby_detections(detections)
 
         # Apply masking
         processed = self.processor.mask_regions(image, detections)

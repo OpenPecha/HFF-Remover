@@ -102,135 +102,115 @@ class HFFProcessor:
 
         return result
 
-    def mask_regions_smooth(
-        self,
-        image: np.ndarray,
-        detections: List[Dict[str, Any]],
-        blur_radius: int = 5,
-        min_confidence: Optional[float] = None,
-    ) -> np.ndarray:
-        """
-        Draw translucent colored overlays with smooth (blurred) edges.
-
-        Each class gets its own color (see CLASS_OVERLAY_COLORS).
+    @staticmethod
+    def _boxes_are_nearby(
+        a: List[float],
+        b: List[float],
+        margin: int,
+    ) -> bool:
+        """Check whether two [x1,y1,x2,y2] boxes overlap or are within *margin* px.
 
         Args:
-            image: Input image as numpy array (BGR format).
-            detections: List of detection dictionaries with 'bbox' keys.
-            blur_radius: Radius for edge blurring.
-            min_confidence: Optional minimum confidence filter.
+            a: First bounding box as [x1, y1, x2, y2].
+            b: Second bounding box as [x1, y1, x2, y2].
+            margin: Maximum gap (in pixels) to still consider boxes "nearby".
 
         Returns:
-            Image with translucent overlays with smooth edges.
+            True if the boxes overlap or the gap between them is ≤ margin.
         """
-        result = image.copy()
-        height, width = result.shape[:2]
-
-        # Build a coloured overlay image and a corresponding intensity mask
-        overlay = np.zeros_like(result)
-        mask = np.zeros((height, width), dtype=np.uint8)
-
-        for detection in detections:
-            if min_confidence is not None:
-                if detection.get("confidence", 1.0) < min_confidence:
-                    continue
-
-            bbox = detection["bbox"]
-            x1, y1, x2, y2 = map(int, bbox)
-
-            # Apply padding
-            x1 = max(0, x1 - self.padding)
-            y1 = max(0, y1 - self.padding)
-            x2 = min(width, x2 + self.padding)
-            y2 = min(height, y2 + self.padding)
-
-            bgr_color = self._color_for_class(detection.get("class_name", ""))
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr_color, -1)
-            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
-
-        # Blur the mask for smooth edges
-        if blur_radius > 0:
-            mask = cv2.GaussianBlur(mask, (blur_radius * 2 + 1, blur_radius * 2 + 1), 0)
-
-        # Normalize mask to 0-1 and apply alpha
-        alpha_map = (mask.astype(np.float32) / 255.0) * self.overlay_alpha
-        alpha_3ch = np.stack([alpha_map] * 3, axis=-1)
-
-        result = (result * (1 - alpha_3ch) + overlay * alpha_3ch).astype(np.uint8)
-
-        return result
-
-    def get_clean_region_mask(
-        self,
-        image_shape: Tuple[int, int],
-        detections: List[Dict[str, Any]],
-        min_confidence: Optional[float] = None,
-    ) -> np.ndarray:
-        """
-        Create a binary mask where clean regions (non-HFF) are white.
-
-        Useful for extracting only the main content.
-
-        Args:
-            image_shape: (height, width) of the image.
-            detections: List of detection dictionaries.
-            min_confidence: Optional minimum confidence filter.
-
-        Returns:
-            Binary mask (255 for clean regions, 0 for HFF regions).
-        """
-        height, width = image_shape[:2]
-        mask = np.ones((height, width), dtype=np.uint8) * 255
-
-        for detection in detections:
-            if min_confidence is not None:
-                if detection.get("confidence", 1.0) < min_confidence:
-                    continue
-
-            bbox = detection["bbox"]
-            x1, y1, x2, y2 = map(int, bbox)
-
-            # Apply padding
-            x1 = max(0, x1 - self.padding)
-            y1 = max(0, y1 - self.padding)
-            x2 = min(width, x2 + self.padding)
-            y2 = min(height, y2 + self.padding)
-
-            # Mark detected region as 0
-            cv2.rectangle(mask, (x1, y1), (x2, y2), 0, -1)
-
-        return mask
-
-    def extract_main_content(
-        self,
-        image: np.ndarray,
-        detections: List[Dict[str, Any]],
-        min_confidence: Optional[float] = None,
-        background_color: Tuple[int, int, int] = (255, 255, 255),
-    ) -> np.ndarray:
-        """
-        Extract main content by replacing HFF regions with background.
-
-        Args:
-            image: Input image as numpy array (BGR format).
-            detections: List of detection dictionaries.
-            min_confidence: Optional minimum confidence filter.
-            background_color: RGB color for replaced regions.
-
-        Returns:
-            Image with only main content visible.
-        """
-        mask = self.get_clean_region_mask(
-            image.shape, detections, min_confidence
+        return not (
+            a[2] + margin < b[0]
+            or b[2] + margin < a[0]
+            or a[3] + margin < b[1]
+            or b[3] + margin < a[1]
         )
 
-        result = image.copy()
-        bgr_color = (background_color[2], background_color[1], background_color[0])
+    @staticmethod
+    def _merge_two_boxes(a: List[float], b: List[float]) -> List[float]:
+        """Return the union bounding box of *a* and *b*."""
+        return [
+            min(a[0], b[0]),
+            min(a[1], b[1]),
+            max(a[2], b[2]),
+            max(a[3], b[3]),
+        ]
 
-        # Replace HFF regions with background color
-        result[mask == 0] = bgr_color
+    @staticmethod
+    def _merge_pass(
+        boxes: List[List[float]],
+        confs: List[float],
+        class_ids: List[Any],
+        margin: int,
+    ) -> bool:
+        """Run one merge pass over *boxes*, mutating the lists in-place.
 
-        return result
+        Returns:
+            True if at least one merge happened (caller should re-run).
+        """
+        changed = False
+        i = 0
+        while i < len(boxes):
+            j = i + 1
+            while j < len(boxes):
+                if HFFProcessor._boxes_are_nearby(boxes[i], boxes[j], margin):
+                    boxes[i] = HFFProcessor._merge_two_boxes(boxes[i], boxes[j])
+                    confs[i] = max(confs[i], confs[j])
+                    boxes.pop(j)
+                    confs.pop(j)
+                    class_ids.pop(j)
+                    changed = True
+                else:
+                    j += 1
+            i += 1
+        return changed
+
+    def merge_nearby_detections(
+        self,
+        detections: List[Dict[str, Any]],
+        margin: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Merge bounding boxes of the same class that are nearby.
+
+        Iteratively merges boxes of the same ``class_name`` whose gap is
+        within *margin* pixels until no more merges are possible.  The
+        resulting detection keeps the **maximum** confidence of the merged
+        group and inherits the ``class_id`` of the first box in the group.
+
+        Args:
+            detections: List of detection dicts (``bbox``, ``class_name``,
+                ``confidence``, and optionally ``class_id``).
+            margin: Maximum gap in pixels between two boxes to still
+                merge them.  ``0`` merges only overlapping boxes.
+
+        Returns:
+            New list of detections with nearby same-class boxes merged.
+        """
+        # Group detections by class_name
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        for det in detections:
+            class_name = det.get("class_name", "")
+            groups.setdefault(class_name, []).append(det)
+
+        merged: List[Dict[str, Any]] = []
+
+        for class_name, class_dets in groups.items():
+            boxes: List[List[float]] = [list(d["bbox"]) for d in class_dets]
+            confs: List[float] = [d.get("confidence", 1.0) for d in class_dets]
+            class_ids: List[Any] = [d.get("class_id") for d in class_dets]
+
+            # Iteratively merge until stable
+            while self._merge_pass(boxes, confs, class_ids, margin):
+                continue
+
+            for bbox, conf, cid in zip(boxes, confs, class_ids):
+                merged.append({
+                    "bbox": bbox,
+                    "class_name": class_name,
+                    "class_id": cid,
+                    "confidence": conf,
+                })
+
+        return merged
 
 
 def _xyxy_to_yolo_xywh_norm(
