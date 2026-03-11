@@ -35,6 +35,7 @@ from tqdm import tqdm
 from hff_remover.detector import (
     HFFDetector,
     PPDocLayoutDetector,
+    Yolo11DocLayoutDetector,
     EnsembleDetector,
     BaseHFFDetector,
 )
@@ -78,7 +79,8 @@ def create_detector(
     Create a detector based on the specified type.
 
     Args:
-        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade').
+        detector_type: Type of detector
+            ('yolo', 'yolo11', 'paddle', 'ensemble', 'cascade').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold.
 
@@ -88,6 +90,14 @@ def create_detector(
     if detector_type == "yolo":
         print("Using DocLayout-YOLO detector")
         return HFFDetector(
+            device=device,
+            confidence_threshold=confidence,
+        )
+
+    elif detector_type == "yolo11":
+        print("Using YOLO11 Document Layout detector (nano)")
+        return Yolo11DocLayoutDetector(
+            model_variant="nano",
             device=device,
             confidence_threshold=confidence,
         )
@@ -245,10 +255,11 @@ def main(input_dir: str, output_dir: str):
     
     # Detector type options:
     #   "yolo"     - DocLayout-YOLO (fast, good general performance)
+    #   "yolo11"   - YOLO11 DocLayout (explicit header/footer/footnote classes)
     #   "paddle"   - PP-DocLayout-L (higher precision, 23 classes)
     #   "ensemble" - Both detectors, merge results (best recall)
     #   "cascade"  - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "yolo"
+    detector_type = "yolo11"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cpu"

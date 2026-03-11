@@ -25,8 +25,8 @@ class TestHFFClasses:
 class TestHFFDetector:
     """Tests for HFFDetector class."""
 
-    @patch("hff_remover.detector.hf_hub_download")
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("huggingface_hub.hf_hub_download")
+    @patch("doclayout_yolo.YOLOv10")
     def test_init_downloads_model(self, mock_yolo, mock_download):
         """Test that model is downloaded if path not provided."""
         mock_download.return_value = "/path/to/model.pt"
@@ -36,7 +36,7 @@ class TestHFFDetector:
         mock_download.assert_called_once()
         mock_yolo.assert_called_once_with("/path/to/model.pt")
 
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("doclayout_yolo.YOLOv10")
     def test_init_with_custom_path(self, mock_yolo):
         """Test initialization with custom model path."""
         detector = HFFDetector(model_path="/custom/model.pt")
@@ -44,25 +44,31 @@ class TestHFFDetector:
         mock_yolo.assert_called_once_with("/custom/model.pt")
         assert detector.model_path == "/custom/model.pt"
 
-    @patch("hff_remover.detector.hf_hub_download")
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("huggingface_hub.hf_hub_download")
+    @patch("doclayout_yolo.YOLOv10")
     def test_detect_filters_hff_classes(self, mock_yolo, mock_download):
-        """Test that detect only returns HFF classes."""
+        """Test that detect only returns HFF classes (abandon in header region kept, title ignored)."""
         mock_download.return_value = "/path/to/model.pt"
 
-        # Create mock detection results
+        # Create mock detection results: title (0), abandon (2), plain_text (1)
+        # bbox [10, 10, 50, 50] -> y_center=30 in 100px image -> 0.30 <= 0.33 -> header
         mock_boxes = MagicMock()
-        mock_boxes.cls = MagicMock()
-        mock_boxes.cls.__len__ = lambda self: 3
-        mock_boxes.cls.__getitem__ = lambda self, i: MagicMock(
-            item=lambda: [0, 2, 1][i]  # title, abandon, plain_text
-        )
-        mock_boxes.xyxy = MagicMock()
-        mock_boxes.xyxy.__getitem__ = lambda self, i: MagicMock(
-            cpu=lambda: MagicMock(numpy=lambda: MagicMock(tolist=lambda: [10, 10, 50, 50]))
-        )
-        mock_boxes.conf = MagicMock()
-        mock_boxes.conf.__getitem__ = lambda self, i: MagicMock(item=lambda: 0.9)
+        mock_boxes.__len__ = lambda self: 3
+        mock_boxes.cls = [
+            MagicMock(item=lambda: 0),  # title -> filtered out
+            MagicMock(item=lambda: 2),  # abandon -> kept as "header"
+            MagicMock(item=lambda: 1),  # plain_text -> kept as "text-area"
+        ]
+        mock_boxes.xyxy = [
+            MagicMock(cpu=lambda: MagicMock(numpy=lambda: MagicMock(tolist=lambda: [10, 10, 50, 50]))),
+            MagicMock(cpu=lambda: MagicMock(numpy=lambda: MagicMock(tolist=lambda: [10, 10, 50, 50]))),
+            MagicMock(cpu=lambda: MagicMock(numpy=lambda: MagicMock(tolist=lambda: [10, 10, 50, 50]))),
+        ]
+        mock_boxes.conf = [
+            MagicMock(item=lambda: 0.9),
+            MagicMock(item=lambda: 0.9),
+            MagicMock(item=lambda: 0.9),
+        ]
 
         mock_result = MagicMock()
         mock_result.boxes = mock_boxes
@@ -74,13 +80,15 @@ class TestHFFDetector:
         detector = HFFDetector()
         detections = detector.detect(np.zeros((100, 100, 3), dtype=np.uint8))
 
-        # Should only return the header/footer/table_footnote classes
-        assert len(detections) == 1
-        assert detections[0]["class_id"] == 2
-        assert detections[0]["class_name"] == "header"
+        # title (class 0) is filtered out; abandon (class 2) and text-area (class 1) kept
+        assert len(detections) == 2
+        class_ids = {d["class_id"] for d in detections}
+        assert 0 not in class_ids  # title filtered
+        assert 2 in class_ids     # abandon kept as header
+        assert 1 in class_ids     # text-area kept
 
-    @patch("hff_remover.detector.hf_hub_download")
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("huggingface_hub.hf_hub_download")
+    @patch("doclayout_yolo.YOLOv10")
     def test_detect_ignores_middle_abandon(self, mock_yolo, mock_download):
         """Test that abandon detections in the middle of the page are ignored."""
         mock_download.return_value = "/path/to/model.pt"
@@ -105,8 +113,8 @@ class TestHFFDetector:
         detections = detector.detect(np.zeros((100, 100, 3), dtype=np.uint8))
         assert detections == []
 
-    @patch("hff_remover.detector.hf_hub_download")
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("huggingface_hub.hf_hub_download")
+    @patch("doclayout_yolo.YOLOv10")
     def test_get_all_detections_returns_all(self, mock_yolo, mock_download):
         """Test that get_all_detections returns all classes."""
         mock_download.return_value = "/path/to/model.pt"
@@ -141,8 +149,8 @@ class TestHFFDetector:
 
             assert len(detections) == 2
 
-    @patch("hff_remover.detector.hf_hub_download")
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("huggingface_hub.hf_hub_download")
+    @patch("doclayout_yolo.YOLOv10")
     def test_detect_batch(self, mock_yolo, mock_download):
         """Test batch detection."""
         mock_download.return_value = "/path/to/model.pt"
@@ -170,8 +178,8 @@ class TestHFFDetector:
 
         assert len(results) == 2
 
-    @patch("hff_remover.detector.hf_hub_download")
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("huggingface_hub.hf_hub_download")
+    @patch("doclayout_yolo.YOLOv10")
     def test_detect_empty_result(self, mock_yolo, mock_download):
         """Test detection with no results."""
         mock_download.return_value = "/path/to/model.pt"
@@ -188,8 +196,8 @@ class TestHFFDetector:
 
         assert len(detections) == 0
 
-    @patch("hff_remover.detector.hf_hub_download")
-    @patch("hff_remover.detector.YOLOv10")
+    @patch("huggingface_hub.hf_hub_download")
+    @patch("doclayout_yolo.YOLOv10")
     def test_confidence_threshold(self, mock_yolo, mock_download):
         """Test that confidence threshold is passed to model."""
         mock_download.return_value = "/path/to/model.pt"
