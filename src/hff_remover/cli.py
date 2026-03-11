@@ -97,10 +97,10 @@ Examples:
         help="Minimum confidence threshold (default: 0.5)",
     )
     process_parser.add_argument(
-        "--padding",
+        "--margin",
         type=int,
         default=0,
-        help="Extra padding around detected regions in pixels (default: 0)",
+        help="Extra margin around detected regions in pixels (default: 0)",
     )
     process_parser.add_argument(
         "--image-size",
@@ -194,10 +194,10 @@ Examples:
         help="Minimum confidence threshold (default: 0.5)",
     )
     single_parser.add_argument(
-        "--padding",
+        "--margin",
         type=int,
         default=0,
-        help="Extra padding around detected regions (default: 0)",
+        help="Extra margin around detected regions (default: 0)",
     )
     single_parser.add_argument(
         "--image-size",
@@ -380,7 +380,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         logger.error(f"Failed to initialize detector: {e}")
         return 1
 
-    processor = HFFProcessor(padding=args.padding)
+    processor = HFFProcessor(margin=args.margin)
     if getattr(args, "save_inference_coco", False):
         inference_writer = COCODatasetWriter(args.inference_dir)
     elif getattr(args, "save_inference_masked", False):
@@ -453,7 +453,7 @@ def cmd_single(args: argparse.Namespace) -> int:
             device=args.device,
             confidence_threshold=args.confidence,
         )
-        processor = HFFProcessor(padding=args.padding)
+        processor = HFFProcessor(margin=args.margin)
         if getattr(args, "save_inference_coco", False):
             inference_writer = COCODatasetWriter(args.inference_dir)
         elif getattr(args, "save_inference_masked", False):
@@ -543,21 +543,14 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
             if getattr(args, "save_inference_coco", False):
                 writer = COCODatasetWriter(args.inference_dir)
-                writer.write_sample(
-                    image=image,
-                    detections=detections,
-                    image_rel_path=input_path.name,
-                )
             else:
-                # masked
-                processor = HFFProcessor(padding=0)
-                masked = processor.mask_regions(image, detections)
                 writer = MaskedInferenceImageWriter(args.inference_dir)
-                writer.write_sample(
-                    image=masked,
-                    detections=detections,
-                    image_rel_path=input_path.name,
-                )
+
+            writer.write_sample(
+                image=image,
+                detections=detections,
+                image_rel_path=input_path.name,
+            )
 
             logger.info(f"Inference saved under: {Path(args.inference_dir).resolve()}")
 

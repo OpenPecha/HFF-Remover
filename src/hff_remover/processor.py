@@ -1,4 +1,4 @@
-"""Image processor for masking detected HFF regions."""
+"""Image processor for merging detections, masking regions, and writing inference data."""
 
 from __future__ import annotations
 
@@ -12,95 +12,16 @@ import cv2
 from hff_remover.utils import save_image
 
 
-# Per-class overlay colors (RGB)
-CLASS_OVERLAY_COLORS: Dict[str, Tuple[int, int, int]] = {
-    "header":         (0, 255, 0),      # Green
-    "footer":         (0, 0, 255),      # Blue
-    "footnote":       (255, 0, 0),      # Red
-    "text-area":      (64, 64, 64),     # Dark grey
-}
-
-# Fallback color if class_name is not in the map above
-DEFAULT_OVERLAY_COLOR: Tuple[int, int, int] = (255, 255, 0)  # Yellow
-
-
 class HFFProcessor:
-    """Processor for overlaying translucent colored boxes on detected regions."""
+    """Processor for merging nearby detections of the same class."""
 
-    def __init__(
-        self,
-        mask_color: Tuple[int, int, int] = (255, 255, 255),
-        padding: int = 0,
-        overlay_alpha: float = 0.35,
-    ):
-        """
-        Initialize the HFF processor.
+    def __init__(self, margin: int = 0):
+        """Initialize the HFF processor.
 
         Args:
-            mask_color: RGB fallback color (kept for API compat).
-            padding: Extra pixels to add around detected regions.
-            overlay_alpha: Opacity of the translucent overlay (0.0 = fully
-                transparent, 1.0 = fully opaque). Default 0.35.
+            margin: Extra pixels to add around detected regions when merging.
         """
-        self.mask_color = mask_color
-        self.padding = padding
-        self.overlay_alpha = overlay_alpha
-
-    @staticmethod
-    def _color_for_class(class_name: str) -> Tuple[int, int, int]:
-        """Return the BGR colour for a given class_name."""
-        rgb = CLASS_OVERLAY_COLORS.get(class_name, DEFAULT_OVERLAY_COLOR)
-        return (rgb[2], rgb[1], rgb[0])  # RGB → BGR
-
-    def mask_regions(
-        self,
-        image: np.ndarray,
-        detections: List[Dict[str, Any]],
-        min_confidence: Optional[float] = None,
-    ) -> np.ndarray:
-        """
-        Draw translucent colored overlays on detected regions.
-
-        Each class gets its own color (see CLASS_OVERLAY_COLORS).
-
-        Args:
-            image: Input image as numpy array (BGR format from OpenCV).
-            detections: List of detection dictionaries with 'bbox' keys.
-            min_confidence: Optional minimum confidence filter.
-
-        Returns:
-            Image with translucent colored overlays on detected regions.
-        """
-        # Make a copy to avoid modifying the original
-        result = image.copy()
-        overlay = result.copy()
-        height, width = result.shape[:2]
-
-        for detection in detections:
-            # Filter by confidence if specified
-            if min_confidence is not None:
-                if detection.get("confidence", 1.0) < min_confidence:
-                    continue
-
-            bbox = detection["bbox"]
-            x1, y1, x2, y2 = map(int, bbox)
-
-            # Apply padding
-            x1 = max(0, x1 - self.padding)
-            y1 = max(0, y1 - self.padding)
-            x2 = min(width, x2 + self.padding)
-            y2 = min(height, y2 + self.padding)
-
-            # Get class-specific BGR color
-            bgr_color = self._color_for_class(detection.get("class_name", ""))
-
-            # Draw filled rectangle on overlay layer
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr_color, -1)
-
-        # Blend the overlay with the original
-        cv2.addWeighted(overlay, self.overlay_alpha, result, 1 - self.overlay_alpha, 0, result)
-
-        return result
+        self.margin = margin
 
     @staticmethod
     def _boxes_are_nearby(
@@ -167,7 +88,7 @@ class HFFProcessor:
     def merge_nearby_detections(
         self,
         detections: List[Dict[str, Any]],
-        margin: int = 20,
+        margin: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Merge bounding boxes of the same class that are nearby.
 
@@ -181,10 +102,13 @@ class HFFProcessor:
                 ``confidence``, and optionally ``class_id``).
             margin: Maximum gap in pixels between two boxes to still
                 merge them.  ``0`` merges only overlapping boxes.
+                Defaults to ``self.margin`` when not provided.
 
         Returns:
             New list of detections with nearby same-class boxes merged.
         """
+        effective_margin = self.margin if margin is None else margin
+
         # Group detections by class_name
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for det in detections:
@@ -199,7 +123,7 @@ class HFFProcessor:
             class_ids: List[Any] = [d.get("class_id") for d in class_dets]
 
             # Iteratively merge until stable
-            while self._merge_pass(boxes, confs, class_ids, margin):
+            while self._merge_pass(boxes, confs, class_ids, effective_margin):
                 continue
 
             for bbox, conf, cid in zip(boxes, confs, class_ids):
@@ -272,7 +196,6 @@ class COCODatasetWriter:
     base_dir: Union[str, Path] = "inference_data"
     images_subdir: str = "images"
     labels_subdir: str = "labels"
-    expects_masked_images: bool = False
 
     def __post_init__(self) -> None:
         self.base_dir = Path(self.base_dir)
@@ -358,21 +281,109 @@ class COCODatasetWriter:
         return image_out_path, label_out_path
 
 
+# Per-class overlay colors (RGB)
+CLASS_OVERLAY_COLORS: Dict[str, Tuple[int, int, int]] = {
+    "header":         (0, 255, 0),      # Green
+    "footer":         (0, 0, 255),      # Blue
+    "footnote":       (255, 0, 0),      # Red
+    "text-area":      (64, 64, 64),     # Dark grey
+}
+
+# Fallback color if class_name is not in the map above
+DEFAULT_OVERLAY_COLOR: Tuple[int, int, int] = (255, 255, 0)  # Yellow
+
+
 @dataclass
 class MaskedInferenceImageWriter:
-    """
-    Save masked inference images only:
-    - inference_data/images/<image>
+    """Apply overlay mask to detected regions and save the result.
+
+    The writer receives the **original** (unmasked) image together with
+    detections, applies :meth:`apply_overlay_mask` internally, and saves
+    the masked image to ``<base_dir>/<images_subdir>/<image_rel_path>``.
     """
 
     base_dir: Union[str, Path] = "inference_data"
     images_subdir: str = "images"
-    expects_masked_images: bool = True
+    margin: int = 0
+    overlay_alpha: float = 0.35
 
     def __post_init__(self) -> None:
+        """Create the output directory tree."""
         self.base_dir = Path(self.base_dir)
         self.images_dir = self.base_dir / self.images_subdir
         self.images_dir.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Masking helpers (static so callers can use without instantiation)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _color_for_class(class_name: str) -> Tuple[int, int, int]:
+        """Return the BGR colour for a given class_name.
+
+        Args:
+            class_name: Detection class name (e.g. ``"header"``).
+
+        Returns:
+            BGR colour tuple for use with OpenCV.
+        """
+        rgb = CLASS_OVERLAY_COLORS.get(class_name, DEFAULT_OVERLAY_COLOR)
+        return (rgb[2], rgb[1], rgb[0])  # RGB → BGR
+
+    @staticmethod
+    def apply_overlay_mask(
+        image: np.ndarray,
+        detections: List[Dict[str, Any]],
+        *,
+        margin: int = 0,
+        overlay_alpha: float = 0.35,
+        min_confidence: Optional[float] = None,
+    ) -> np.ndarray:
+        """Draw translucent colored overlays on detected regions.
+
+        Each class gets its own color (see :data:`CLASS_OVERLAY_COLORS`).
+
+        Args:
+            image: Input image as numpy array (BGR format from OpenCV).
+            detections: List of detection dicts with ``bbox`` keys.
+            margin: Extra pixels to add around detected regions.
+            overlay_alpha: Opacity of the overlay (0.0–1.0). Default 0.35.
+            min_confidence: Optional minimum confidence filter.
+
+        Returns:
+            Copy of *image* with translucent colored overlays on detected
+            regions.
+        """
+        result = image.copy()
+        overlay = result.copy()
+        height, width = result.shape[:2]
+
+        for detection in detections:
+            if min_confidence is not None:
+                if detection.get("confidence", 1.0) < min_confidence:
+                    continue
+
+            bbox = detection["bbox"]
+            x1, y1, x2, y2 = map(int, bbox)
+
+            x1 = max(0, x1 - margin)
+            y1 = max(0, y1 - margin)
+            x2 = min(width, x2 + margin)
+            y2 = min(height, y2 + margin)
+
+            bgr_color = MaskedInferenceImageWriter._color_for_class(
+                detection.get("class_name", ""),
+            )
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr_color, -1)
+
+        cv2.addWeighted(
+            overlay, overlay_alpha, result, 1 - overlay_alpha, 0, result,
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Writer interface
+    # ------------------------------------------------------------------
 
     def write_sample(
         self,
@@ -380,15 +391,32 @@ class MaskedInferenceImageWriter:
         detections: List[Dict[str, Any]],
         image_rel_path: Union[str, Path],
     ) -> Tuple[Path, None]:
+        """Mask detected regions on *image* and save the result.
+
+        Args:
+            image: Original (unmasked) image in BGR format.
+            detections: Detection dicts with ``bbox`` and ``class_name`` keys.
+            image_rel_path: Relative filename for the saved image.
+
+        Returns:
+            Tuple of (saved image path, ``None``).
         """
-        Save one image to `images/`. `detections` is ignored (kept for API compatibility).
-        """
-        _ = detections
+        masked = self.apply_overlay_mask(
+            image,
+            detections,
+            margin=self.margin,
+            overlay_alpha=self.overlay_alpha,
+        )
+
         image_rel_path = Path(image_rel_path)
         if image_rel_path.suffix == "":
             image_rel_path = image_rel_path.with_suffix(".jpg")
 
         image_out_path = self.images_dir / image_rel_path
         image_out_path.parent.mkdir(parents=True, exist_ok=True)
-        save_image(image, image_out_path)
+        save_image(masked, image_out_path)
         return image_out_path, None
+
+
+# Module-level convenience alias so callers don't need to reference the class.
+apply_overlay_mask = MaskedInferenceImageWriter.apply_overlay_mask

@@ -8,7 +8,7 @@ from hff_remover.detector import (
     EnsembleDetector,
     BaseHFFDetector,
 )
-from hff_remover.processor import HFFProcessor
+from hff_remover.processor import HFFProcessor, apply_overlay_mask
 from hff_remover.batch import BatchProcessor
 from hff_remover.evaluate import evaluate, EvaluationResult
 
@@ -18,6 +18,7 @@ __all__ = [
     "EnsembleDetector",
     "BaseHFFDetector",
     "HFFProcessor",
+    "apply_overlay_mask",
     "BatchProcessor",
     "evaluate",
     "EvaluationResult",

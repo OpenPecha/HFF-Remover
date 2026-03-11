@@ -131,9 +131,10 @@ class TestBatchProcessor:
         assert batch.detector is detector
         assert batch.processor is processor
 
+    @patch("hff_remover.batch.apply_overlay_mask")
     @patch("hff_remover.batch.HFFDetector")
     @patch("hff_remover.batch.HFFProcessor")
-    def test_process_single(self, mock_processor_class, mock_detector_class):
+    def test_process_single(self, mock_processor_class, mock_detector_class, mock_overlay):
         """Test processing a single image."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create test image
@@ -153,8 +154,9 @@ class TestBatchProcessor:
             mock_detector_class.return_value = mock_detector
 
             mock_processor = MagicMock()
-            mock_processor.mask_regions.return_value = test_image
             mock_processor_class.return_value = mock_processor
+
+            mock_overlay.return_value = test_image
 
             batch = BatchProcessor()
             result = batch.process_single(input_path, output_path)

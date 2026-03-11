@@ -9,6 +9,7 @@ from hff_remover.processor import (
     DEFAULT_OVERLAY_COLOR,
     COCODatasetWriter,
     MaskedInferenceImageWriter,
+    apply_overlay_mask,
 )
 
 
@@ -20,42 +21,25 @@ def _expected_overlay(base_bgr, overlay_rgb, alpha):
     return np.round(blended).astype(np.uint8)
 
 
-class TestHFFProcessor:
-    """Tests for HFFProcessor class."""
+# ---------------------------------------------------------------------------
+# Tests for the standalone apply_overlay_mask function
+# ---------------------------------------------------------------------------
 
-    def test_init_default(self):
-        """Test default initialization."""
-        processor = HFFProcessor()
-        assert processor.mask_color == (255, 255, 255)
-        assert processor.padding == 0
-        assert processor.overlay_alpha == 0.35
+class TestApplyOverlayMask:
+    """Tests for the apply_overlay_mask standalone function."""
 
-    def test_init_custom(self):
-        """Test custom initialization."""
-        processor = HFFProcessor(
-            mask_color=(0, 0, 0),
-            padding=10,
-            overlay_alpha=0.5,
-        )
-        assert processor.mask_color == (0, 0, 0)
-        assert processor.padding == 10
-        assert processor.overlay_alpha == 0.5
-
-    def test_mask_regions_empty(self):
-        """Test masking with no detections."""
-        processor = HFFProcessor()
+    def test_empty_detections(self):
+        """With no detections the image is returned unchanged."""
         image = np.zeros((100, 100, 3), dtype=np.uint8)
-        image.fill(128)  # Gray image
+        image.fill(128)
 
-        result = processor.mask_regions(image, [])
+        result = apply_overlay_mask(image, [])
 
-        # Should be unchanged
         assert np.array_equal(result, image)
 
-    def test_mask_regions_single_header(self):
-        """Test overlay for a header detection (green)."""
+    def test_single_header(self):
+        """Header detection produces a green overlay."""
         alpha = 0.35
-        processor = HFFProcessor(overlay_alpha=alpha)
         image = np.zeros((100, 100, 3), dtype=np.uint8)
 
         detections = [{
@@ -65,18 +49,15 @@ class TestHFFProcessor:
             "confidence": 0.9,
         }]
 
-        result = processor.mask_regions(image, detections)
+        result = apply_overlay_mask(image, detections, overlay_alpha=alpha)
 
         expected = _expected_overlay([0, 0, 0], CLASS_OVERLAY_COLORS["header"], alpha)
-        # All pixels in the region should be the blended colour
         assert np.all(result[10:30, 10:50] == expected)
-        # Outside region is unchanged (black)
         assert np.all(result[0:9, 0:9] == [0, 0, 0])
 
-    def test_mask_regions_footer_blue(self):
-        """Test overlay for a footer detection (blue)."""
+    def test_footer_blue(self):
+        """Footer detection produces a blue overlay."""
         alpha = 0.5
-        processor = HFFProcessor(overlay_alpha=alpha)
         image = np.full((100, 100, 3), 200, dtype=np.uint8)
 
         detections = [{
@@ -85,32 +66,14 @@ class TestHFFProcessor:
             "confidence": 0.9,
         }]
 
-        result = processor.mask_regions(image, detections)
+        result = apply_overlay_mask(image, detections, overlay_alpha=alpha)
 
         expected = _expected_overlay([200, 200, 200], CLASS_OVERLAY_COLORS["footer"], alpha)
         assert np.all(result[90:100, 0:100] == expected)
 
-    def test_mask_regions_text_dark_grey(self):
-        """Text areas get a dark-grey overlay, not skipped."""
-        alpha = 0.35
-        processor = HFFProcessor(overlay_alpha=alpha)
-        image = np.zeros((100, 100, 3), dtype=np.uint8)
-
-        detections = [{
-            "bbox": [10, 10, 50, 50],
-            "class_name": "text",
-            "confidence": 0.9,
-        }]
-
-        result = processor.mask_regions(image, detections)
-
-        expected = _expected_overlay([0, 0, 0], CLASS_OVERLAY_COLORS["text"], alpha)
-        assert np.all(result[10:50, 10:50] == expected)
-
-    def test_mask_regions_with_padding(self):
-        """Test overlay with padding."""
-        alpha = 1.0  # fully opaque for easy assertion
-        processor = HFFProcessor(padding=5, overlay_alpha=alpha)
+    def test_with_margin(self):
+        """Margin expands the overlay region."""
+        alpha = 1.0
         image = np.zeros((100, 100, 3), dtype=np.uint8)
 
         detections = [{
@@ -119,65 +82,68 @@ class TestHFFProcessor:
             "confidence": 0.9,
         }]
 
-        result = processor.mask_regions(image, detections)
+        result = apply_overlay_mask(image, detections, margin=5, overlay_alpha=alpha)
 
         expected = _expected_overlay([0, 0, 0], CLASS_OVERLAY_COLORS["header"], alpha)
-        # Padded region (15-45) should be overlaid
         assert np.all(result[15:45, 15:45] == expected)
 
-    def test_mask_regions_confidence_filter(self):
-        """Test confidence filtering."""
+    def test_confidence_filter(self):
+        """Only detections above min_confidence are overlaid."""
         alpha = 0.35
-        processor = HFFProcessor(overlay_alpha=alpha)
         image = np.zeros((100, 100, 3), dtype=np.uint8)
 
         detections = [
-            {
-                "bbox": [10, 10, 30, 30],
-                "class_name": "header",
-                "confidence": 0.3,
-            },
-            {
-                "bbox": [50, 50, 70, 70],
-                "class_name": "header",
-                "confidence": 0.8,
-            },
+            {"bbox": [10, 10, 30, 30], "class_name": "header", "confidence": 0.3},
+            {"bbox": [50, 50, 70, 70], "class_name": "header", "confidence": 0.8},
         ]
 
-        result = processor.mask_regions(image, detections, min_confidence=0.5)
+        result = apply_overlay_mask(image, detections, overlay_alpha=alpha, min_confidence=0.5)
 
-        # Low confidence region should not be overlaid
         assert np.all(result[10:30, 10:30] == [0, 0, 0])
-        # High confidence region should be overlaid
         expected = _expected_overlay([0, 0, 0], CLASS_OVERLAY_COLORS["header"], alpha)
         assert np.all(result[50:70, 50:70] == expected)
 
-    def test_mask_regions_preserves_original(self):
-        """Test that original image is not modified."""
-        processor = HFFProcessor()
+    def test_preserves_original(self):
+        """The original image array must not be mutated."""
         image = np.zeros((100, 100, 3), dtype=np.uint8)
         original = image.copy()
 
         detections = [{"bbox": [10, 10, 50, 30], "class_name": "footer", "confidence": 0.9}]
-        processor.mask_regions(image, detections)
+        apply_overlay_mask(image, detections)
 
         assert np.array_equal(image, original)
 
-    def test_mask_regions_clamps_to_image_bounds(self):
-        """Test that bounding boxes are clamped to image bounds."""
-        processor = HFFProcessor(padding=20)
+    def test_clamps_to_image_bounds(self):
+        """Large margin must not produce out-of-bounds coordinates."""
         image = np.zeros((100, 100, 3), dtype=np.uint8)
 
-        detections = [{
-            "bbox": [0, 0, 30, 20],
-            "confidence": 0.9,
-        }]
+        detections = [{"bbox": [0, 0, 30, 20], "confidence": 0.9}]
+        result = apply_overlay_mask(image, detections, margin=20)
 
-        result = processor.mask_regions(image, detections)
-
-        # Should not raise and shape is preserved
         assert result.shape == image.shape
 
+
+# ---------------------------------------------------------------------------
+# Tests for HFFProcessor (merging only)
+# ---------------------------------------------------------------------------
+
+class TestHFFProcessor:
+    """Tests for HFFProcessor class."""
+
+    def test_init_default(self):
+        """Test default initialization."""
+        processor = HFFProcessor()
+        assert processor.margin == 0
+
+    def test_init_custom(self):
+        """Test custom initialization."""
+        processor = HFFProcessor(margin=10)
+        assert processor.margin == 10
+
+
+# ---------------------------------------------------------------------------
+# Tests for COCODatasetWriter
+# ---------------------------------------------------------------------------
 
 class TestCOCODatasetWriter:
     def test_writes_image_label_and_data_yaml(self, tmp_path):
@@ -241,13 +207,23 @@ class TestCOCODatasetWriter:
         assert b_lbl.split()[0] == "2"
 
 
+# ---------------------------------------------------------------------------
+# Tests for MaskedInferenceImageWriter (now handles masking internally)
+# ---------------------------------------------------------------------------
+
 class TestMaskedInferenceImageWriter:
-    def test_writes_only_images(self, tmp_path):
-        writer = MaskedInferenceImageWriter(base_dir=tmp_path / "inference_data")
-        image = np.zeros((10, 20, 3), dtype=np.uint8)
+    def test_writes_masked_image(self, tmp_path):
+        """Writer should apply overlay mask and save the result."""
+        writer = MaskedInferenceImageWriter(
+            base_dir=tmp_path / "inference_data",
+            overlay_alpha=1.0,  # fully opaque for easy assertion
+        )
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        detections = [{"bbox": [10, 10, 50, 30], "class_name": "header", "confidence": 0.9}]
+
         img_path, lbl_path = writer.write_sample(
             image=image,
-            detections=[{"bbox": [0, 0, 5, 5], "class_name": "header"}],
+            detections=detections,
             image_rel_path="x.jpg",
         )
 
@@ -257,3 +233,40 @@ class TestMaskedInferenceImageWriter:
         # Should not create labels folder or data.yaml
         assert not (tmp_path / "inference_data" / "labels").exists()
         assert not (tmp_path / "inference_data" / "data.yaml").exists()
+
+    def test_saved_image_is_masked(self, tmp_path):
+        """The saved image must differ from the original when detections exist."""
+        import cv2
+
+        writer = MaskedInferenceImageWriter(
+            base_dir=tmp_path / "inference_data",
+            overlay_alpha=0.5,
+        )
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        detections = [{"bbox": [0, 0, 50, 50], "class_name": "header", "confidence": 0.9}]
+
+        img_path, _ = writer.write_sample(
+            image=image,
+            detections=detections,
+            image_rel_path="masked.png",
+        )
+
+        saved = cv2.imread(str(img_path))
+        # The overlay region should NOT be all-black any more
+        assert not np.array_equal(saved[0:50, 0:50], np.zeros((50, 50, 3), dtype=np.uint8))
+
+    def test_no_detections_preserves_image(self, tmp_path):
+        """With no detections the saved image should match the original."""
+        import cv2
+
+        writer = MaskedInferenceImageWriter(base_dir=tmp_path / "inference_data")
+        image = np.full((10, 20, 3), 128, dtype=np.uint8)
+
+        img_path, _ = writer.write_sample(
+            image=image,
+            detections=[],
+            image_rel_path="unchanged.png",
+        )
+
+        saved = cv2.imread(str(img_path))
+        assert np.array_equal(saved, image)

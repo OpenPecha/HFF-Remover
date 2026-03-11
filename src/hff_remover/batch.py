@@ -18,6 +18,7 @@ from hff_remover.processor import (
     HFFProcessor,
     COCODatasetWriter,
     MaskedInferenceImageWriter,
+    apply_overlay_mask,
 )
 from hff_remover.utils import (
     find_images,
@@ -119,7 +120,7 @@ class BatchProcessor:
         inference_writer: Optional[object] = None,
         device: str = "cuda",
         confidence_threshold: float = 0.5,
-        padding: int = 0,
+        margin: int = 0,
         batch_size: int = 8,
         num_io_workers: int = 4,
         checkpoint_interval: int = 100,
@@ -132,7 +133,7 @@ class BatchProcessor:
             processor: HFF processor instance. Created if not provided.
             device: Device for inference ('cuda' or 'cpu').
             confidence_threshold: Minimum confidence for detections.
-            padding: Padding around detected regions.
+            margin: Margin around detected regions.
             batch_size: Number of images to process at once.
             num_io_workers: Number of threads for I/O operations.
             checkpoint_interval: Save checkpoint every N images.
@@ -141,7 +142,7 @@ class BatchProcessor:
             device=device,
             confidence_threshold=confidence_threshold,
         )
-        self.processor = processor or HFFProcessor(padding=padding)
+        self.processor = processor or HFFProcessor(margin=margin)
         self.inference_writer = inference_writer
         self.batch_size = batch_size
         self.num_io_workers = num_io_workers
@@ -345,7 +346,7 @@ class BatchProcessor:
                         batch_stats["footnotes"] += 1
 
                 # Apply masking
-                processed = self.processor.mask_regions(image, detections)
+                processed = apply_overlay_mask(image, detections)
 
                 # Optionally save inference images/labels
                 if self.inference_writer is not None:
@@ -354,11 +355,9 @@ class BatchProcessor:
                     except ValueError:
                         rel_path = Path(path.name)
 
-                    use_masked = bool(getattr(self.inference_writer, "expects_masked_images", False))
-                    image_to_write = processed if use_masked else image
                     try:
                         self.inference_writer.write_sample(
-                            image=image_to_write,
+                            image=image,
                             detections=detections,
                             image_rel_path=rel_path,
                         )
@@ -436,15 +435,13 @@ class BatchProcessor:
         detections = self.processor.merge_nearby_detections(detections)
 
         # Apply masking
-        processed = self.processor.mask_regions(image, detections)
+        processed = apply_overlay_mask(image, detections)
 
         # Optionally save inference images/labels
         if self.inference_writer is not None:
-            use_masked = bool(getattr(self.inference_writer, "expects_masked_images", False))
-            image_to_write = processed if use_masked else image
             try:
                 self.inference_writer.write_sample(
-                    image=image_to_write,
+                    image=image,
                     detections=detections,
                     image_rel_path=input_path.name,
                 )

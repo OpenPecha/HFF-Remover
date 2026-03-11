@@ -39,26 +39,34 @@ from hff_remover.detector import (
     BaseHFFDetector,
 )
 from hff_remover.processor import (
-    HFFProcessor,
     COCODatasetWriter,
+    HFFProcessor,
     MaskedInferenceImageWriter,
 )
-from hff_remover.utils import load_image, save_image, find_images
+from hff_remover.utils import load_image, find_images
 
 
-def create_inference_writer(
-    *,
-    save_inference_coco: bool,
-    save_inference_masked: bool,
+def create_inference_writers(
+    output_format: str,
     inference_dir: str,
-):
-    if save_inference_coco and save_inference_masked:
-        raise ValueError("Choose only one: save_inference_coco or save_inference_masked")
-    if save_inference_coco:
-        return COCODatasetWriter(inference_dir)
-    if save_inference_masked:
-        return MaskedInferenceImageWriter(inference_dir)
-    return None
+    margin: int = 0,
+) -> list:
+    """Create the inference writer(s) for the requested output format.
+
+    Args:
+        output_format: One of ``"coco"``, ``"masked"``, or ``"both"``.
+        inference_dir: Base directory for inference output.
+        margin: Extra pixels around detected regions (masked writer only).
+
+    Returns:
+        List of writer instances (may be empty).
+    """
+    writers: list = []
+    if output_format in {"coco", "both"}:
+        writers.append(COCODatasetWriter(inference_dir))
+    if output_format in {"masked", "both"}:
+        writers.append(MaskedInferenceImageWriter(inference_dir, margin=margin))
+    return writers
 
 
 def create_detector(
@@ -129,7 +137,7 @@ def process_directory(
     detector_type: str = "yolo",
     device: str = "cpu",
     confidence: float = 0.5,
-    padding: int = 0,
+    margin: int = 0,
     output_format: str = "coco",
     inference_dir: Optional[str] = None,
 ) -> dict:
@@ -142,7 +150,7 @@ def process_directory(
         detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold for detections.
-        padding: Extra pixels to add around detected regions.
+        margin: Extra pixels to add around detected regions.
 
     Returns:
         Dictionary with processing statistics.
@@ -162,10 +170,9 @@ def process_directory(
         print("No images found!")
         return {"processed": 0, "failed": 0, "total_detections": 0}
 
-    # Initialize detector and processor
+    # Initialize detector
     print(f"Loading model on {device}...")
     detector = create_detector(detector_type, device, confidence)
-    processor = HFFProcessor(padding=padding)
 
     # Default: keep inference output in the same directory as processed output
     inference_dir = inference_dir or output_dir
@@ -174,14 +181,9 @@ def process_directory(
     if output_format not in {"masked", "coco", "both"}:
         raise ValueError("output_format must be one of: masked, coco, both")
 
-    save_masked_output = output_format in {"masked", "both"}
-    save_inference_coco = output_format in {"coco", "both"}
+    processor = HFFProcessor(margin=margin)
 
-    inference_writer = create_inference_writer(
-        save_inference_coco=save_inference_coco,
-        save_inference_masked=False,
-        inference_dir=inference_dir,
-    )
+    writers = create_inference_writers(output_format, inference_dir, margin=margin)
     print("Model loaded successfully!")
 
     # Process statistics
@@ -202,29 +204,19 @@ def process_directory(
 
             # Detect HFF regions
             detections = detector.detect(image)
+            detections = processor.merge_nearby_detections(detections)
             stats["total_detections"] += len(detections)
 
-            # Mask detected regions with white
-            result_image = processor.mask_regions(image, detections)
-
-            # Optionally save COCO inference dataset (uses original image)
-            if inference_writer is not None:
+            # Write inference output (each writer handles its own format)
+            for writer in writers:
                 try:
-                    inference_writer.write_sample(
+                    writer.write_sample(
                         image=image,
                         detections=detections,
                         image_rel_path=image_path.name,
                     )
                 except Exception as e:
                     print(f"\nWarning: failed to write inference sample for {image_path}: {e}")
-
-            if save_masked_output:
-                # Create output filename with rm_ prefix
-                output_filename = f"rm_{image_path.name}"
-                output_file_path = output_path / output_filename
-
-                # Save masked result
-                save_image(result_image, output_file_path)
             stats["processed"] += 1
 
         except Exception as e:
@@ -264,8 +256,8 @@ def main(input_dir: str, output_dir: str):
     # Confidence threshold (0.0 - 1.0)
     confidence = 0.3
     
-    # Padding around detected regions in pixels
-    padding = 0
+    # Margin around detected regions in pixels
+    margin = 0
 
     # Save inference as COCO dataset
     output_format = "coco"
@@ -279,7 +271,7 @@ def main(input_dir: str, output_dir: str):
         detector_type=detector_type,
         device=device,
         confidence=confidence,
-        padding=padding,
+        margin=margin,
         output_format=output_format,
     )
 
