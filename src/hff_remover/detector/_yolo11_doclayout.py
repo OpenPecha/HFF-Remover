@@ -18,25 +18,25 @@ from hff_remover.detector._base import BaseHFFDetector
 # DocLayNet 11-class mapping used by the YOLO11 document-layout model.
 # Order follows the model's training configuration.
 YOLO11_DOCLAYOUT_CLASS_NAMES: Dict[int, str] = {
-    0: "Text",
-    1: "Title",
-    2: "Section-header",
-    3: "Table",
-    4: "Picture",
-    5: "Caption",
-    6: "List-item",
-    7: "Formula",
-    8: "Page-header",
-    9: "Page-footer",
-    10: "Footnote",
+    0: "Caption",
+    1: "Footnote",
+    2: "Formula",
+    3: "'List-item",
+    4: "Page-footer",
+    5: "Page-header",
+    6: "Picture",
+    7: "Section-header",
+    8: "Table",
+    9: "Text",
+    10: "Title",
 }
 
 # HFF-relevant subset: the classes we keep for header/footer/footnote removal.
 YOLO11_DOCLAYOUT_HFF_CLASSES: Dict[int, str] = {
-    0: "Text",          # body text
-    8: "Page-header",   # page header
-    9: "Page-footer",   # page footer
-    10: "Footnote",     # footnote
+    9: "Text",          # body text
+    5: "Page-header",   # page header
+    4: "Page-footer",   # page footer
+    1: "Footnote",      # footnote
 }
 
 # Map from model variant name to the weight filename on the Hub.
@@ -49,21 +49,20 @@ _MODEL_VARIANT_FILES: Dict[str, str] = {
 _HF_REPO_ID = "Armaggheddon/yolo11-document-layout"
 
 
-def _normalize_hff_label(class_id: int) -> Optional[str]:
-    """Map a YOLO11 DocLayNet class_id to a normalised HFF label.
-
-    Returns:
-        Normalised label string, or ``None`` if the class is not HFF-relevant.
-    """
-    if class_id == 0:
-        return "text-area"
-    if class_id == 8:
-        return "header"
-    if class_id == 9:
-        return "footer"
-    if class_id == 10:
-        return "footnote"
-    return None
+# Map raw YOLO11 DocLayNet class names to normalised HFF labels.
+_YOLO11_LABEL_MAP: Dict[str, str] = {
+    "Text": "text-area",
+    "Caption": "text-area",
+    "Formula": "text-area",
+    "List-item": "text-area",
+    "Picture": "text-area",
+    "Section-header": "text-area",
+    "Table": "text-area",
+    "Title": "text-area",
+    "Page-header": "header",
+    "Page-footer": "footer",
+    "Footnote": "footnote",
+}
 
 
 class Yolo11DocLayoutDetector(BaseHFFDetector):
@@ -119,6 +118,20 @@ class Yolo11DocLayoutDetector(BaseHFFDetector):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _normalize_detection_label(self, raw_label: Union[int, str]) -> Optional[str]:
+        """Normalise a YOLO11 DocLayNet class ID to a standard HFF label.
+
+        Args:
+            raw_label: Integer class ID from the YOLO11 model.
+
+        Returns:
+            Normalised label string, or ``None`` if not HFF-relevant.
+        """
+        class_id = int(raw_label)
+
+        class_name = YOLO11_DOCLAYOUT_HFF_CLASSES[class_id]
+        return _YOLO11_LABEL_MAP.get(class_name)
+
     def _extract_hff_detections(
         self,
         boxes: Any,
@@ -130,7 +143,7 @@ class Yolo11DocLayoutDetector(BaseHFFDetector):
         detections: List[Dict[str, Any]] = []
         for j in range(len(boxes)):
             class_id = int(boxes.cls[j].item())
-            label = _normalize_hff_label(class_id)
+            label = self._normalize_detection_label(class_id)
             if label is None:
                 continue
 

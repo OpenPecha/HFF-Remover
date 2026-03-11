@@ -1,7 +1,7 @@
 """PP-DocLayout (PaddlePaddle) based HFF detector."""
 
 from pathlib import Path
-from typing import List, Dict, Any, Union
+from typing import Dict, List, Any, Optional, Union
 
 import numpy as np
 
@@ -21,6 +21,21 @@ PP_DOCLAYOUT_HFF_CLASSES = {
     "plain text",      # Alternative naming
     "plain_text",      # Alternative naming
     "paragraph",       # Alternative naming
+}
+
+# Map raw PP-DocLayout label variants to normalised HFF labels.
+_PP_LABEL_MAP: Dict[str, str] = {
+    "header": "header",
+    "page_header": "header",
+    "footer": "footer",
+    "page_footer": "footer",
+    "page_number": "footer",
+    "footnote": "footnote",
+    "footnotes": "footnote",
+    "text": "text-area",
+    "plain_text": "text-area",
+    "plain text": "text-area",
+    "paragraph": "text-area",
 }
 
 
@@ -56,6 +71,18 @@ class PPDocLayoutDetector(BaseHFFDetector):
             use_gpu=use_gpu,
             enable_mkldnn=False,  # Disable MKLDNN to avoid bugs
         )
+
+    def _normalize_detection_label(self, raw_label: Union[int, str]) -> Optional[str]:
+        """Normalise a PP-DocLayout label string to a standard HFF label.
+
+        Args:
+            raw_label: Raw label string from PP-DocLayout.
+
+        Returns:
+            Normalised label string, or ``None`` if not HFF-relevant.
+        """
+        key = str(raw_label).lower().replace("-", "_").replace(" ", "_")
+        return _PP_LABEL_MAP.get(key)
 
     def detect(
         self,
@@ -103,12 +130,10 @@ class PPDocLayoutDetector(BaseHFFDetector):
             if score < self.confidence_threshold:
                 continue
 
-            # Only keep HFF classes
-            if label not in PP_DOCLAYOUT_HFF_CLASSES:
+            # Normalize label — returns None for non-HFF classes
+            normalized_label = self._normalize_detection_label(label)
+            if normalized_label is None:
                 continue
-
-            # Normalize label name
-            normalized_label = self._normalize_label(label)
 
             # Convert bbox to [x1, y1, x2, y2] format
             if len(bbox) == 4:
@@ -154,21 +179,6 @@ class PPDocLayoutDetector(BaseHFFDetector):
             all_detections.append(detections)
 
         return all_detections
-
-    def _normalize_label(self, label: str) -> str:
-        """Normalize label names to standard format."""
-        label = label.lower().replace("-", "_").replace(" ", "_")
-
-        if label in ("header", "page_header"):
-            return "header"
-        elif label in ("footer", "page_footer", "page_number"):
-            return "footer"
-        elif label in ("footnote", "footnotes"):
-            return "footnote"
-        elif label in ("text", "plain_text", "paragraph"):
-            return "text-area"
-
-        return label
 
     def get_all_detections(
         self,

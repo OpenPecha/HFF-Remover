@@ -1,7 +1,7 @@
 """Abstract base class for HFF detectors."""
 
 from pathlib import Path
-from typing import List, Dict, Any, Union
+from typing import Any, Dict, List, Optional, Union
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -11,13 +11,29 @@ class BaseHFFDetector(ABC):
     """Abstract base class for HFF detectors."""
 
     @abstractmethod
+    def _normalize_detection_label(self, raw_label: Union[int, str]) -> Optional[str]:
+        """Normalise a model-specific label to a standard HFF label.
+
+        Each detector maps its own raw label (an ``int`` class ID or a
+        ``str`` class name, depending on the model) to one of the
+        canonical labels: ``"header"``, ``"footer"``, ``"footnote"``,
+        ``"text-area"``, or returns ``None`` to discard the detection.
+
+        Args:
+            raw_label: The raw class identifier produced by the model.
+
+        Returns:
+            A normalised label string, or ``None`` if the class is not
+            HFF-relevant.
+        """
+
+    @abstractmethod
     def detect(
         self,
         image: Union[str, Path, np.ndarray],
         image_size: int = 1024,
     ) -> List[Dict[str, Any]]:
-        """
-        Detect headers, footers, and footnotes in an image.
+        """Detect headers, footers, and footnotes in an image.
 
         Args:
             image: Path to image file or numpy array.

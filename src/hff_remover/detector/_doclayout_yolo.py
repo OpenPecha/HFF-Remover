@@ -1,7 +1,7 @@
 """DocLayout-YOLO based HFF detector."""
 
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union
 
 import numpy as np
 
@@ -26,10 +26,19 @@ DOCLAYOUT_YOLO_CLASS_NAMES = {
 # In DocLayout-YOLO, "abandon" (class 2) represents headers/footers/page numbers
 # "table_footnote" (class 7) represents footnotes in tables
 # "plain_text" (class 1) represents text areas / body text
-DOCLAYOUT_YOLO_HFF_CLASSES = {
+DOCLAYOUT_YOLO_HFF_CLASSES: Dict[int, str] = {
     1: "plain_text",     # Text area / body text
     2: "abandon",        # Headers, footers, page numbers
     7: "table_footnote", # Table footnotes
+}
+
+# Map raw DocLayout-YOLO class names to normalised HFF labels.
+# "abandon" is kept as-is here; it requires positional resolution to
+# become "header" or "footer" (handled by the detector class).
+_DOCLAYOUT_LABEL_MAP: Dict[str, str] = {
+    "plain_text": "text-area",
+    "table_footnote": "footnote",
+    "abandon": "abandon",  # sentinel — resolved by position later
 }
 
 
@@ -76,6 +85,23 @@ class HFFDetector(BaseHFFDetector):
         self.model = YOLOv10(model_path)
         self.model_path = model_path
 
+    def _normalize_detection_label(self, raw_label: Union[int, str]) -> Optional[str]:
+        """Normalise a DocLayout-YOLO class ID to a standard HFF label.
+
+        Args:
+            raw_label: Integer class ID from DocLayout-YOLO.
+
+        Returns:
+            Normalised label (``"text-area"``, ``"footnote"``, or the
+            sentinel ``"abandon"``), or ``None`` if not HFF-relevant.
+        """
+        class_id = int(raw_label)
+        if class_id not in DOCLAYOUT_YOLO_HFF_CLASSES:
+            return None
+
+        class_name = DOCLAYOUT_YOLO_HFF_CLASSES[class_id]
+        return _DOCLAYOUT_LABEL_MAP.get(class_name)
+
     def _get_image_height(self, image: Union[str, Path, np.ndarray]) -> Optional[int]:
         """Best-effort extraction of image height for positional labeling."""
         if isinstance(image, np.ndarray):
@@ -97,41 +123,26 @@ class HFFDetector(BaseHFFDetector):
         image_height: Optional[int],
     ) -> Optional[Dict[str, Any]]:
         """Convert DocLayout-YOLO box into an HFF detection dict, or None to ignore."""
-        # Keep plain_text / text area (class 1)
-        if class_id == 1:
-            return {
-                "bbox": bbox,
-                "class_id": class_id,
-                "class_name": "text-area",
-                "confidence": confidence,
-            }
+        label = self._normalize_detection_label(class_id)
+        if label is None:
+            return None
 
-        # Keep table_footnote (class 7)
-        if class_id == 7:
-            return {
-                "bbox": bbox,
-                "class_id": class_id,
-                "class_name": "footnote",
-                "confidence": confidence,
-            }
-
-        # Handle abandon (class 2) by position: header/footer/middle-ignore
-        if class_id == 2:
+        # "abandon" is a sentinel that needs positional resolution.
+        if label == "abandon":
             if image_height is None:
-                class_name: Optional[str] = "abandon"
+                label = "abandon"
             else:
-                class_name = self._classify_abandon_by_position(bbox, image_height)
-            if class_name is None:
-                return None
-            return {
-                "bbox": bbox,
-                "class_id": class_id,
-                "class_name": class_name,
-                "confidence": confidence,
-            }
+                resolved = self._classify_abandon_by_position(bbox, image_height)
+                if resolved is None:
+                    return None
+                label = resolved
 
-        # Ignore all other classes
-        return None
+        return {
+            "bbox": bbox,
+            "class_id": class_id,
+            "class_name": label,
+            "confidence": confidence,
+        }
 
     def _get_result_image_height(self, result: Any, src: Union[str, Path, np.ndarray]) -> Optional[int]:
         """Best-effort extraction of image height for a single prediction result."""
