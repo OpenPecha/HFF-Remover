@@ -15,6 +15,11 @@ from hff_remover.detector._yolo11_doclayout import (
     YOLO11_DOCLAYOUT_CLASS_NAMES,
     YOLO11_DOCLAYOUT_HFF_CLASSES,
 )
+from hff_remover.detector._surya_layout import (
+    SuryaLayoutDetector,
+    SURYA_HFF_CLASS_IDS,
+    SURYA_LABEL_TO_OUR_CLASS,
+)
 from hff_remover.detector._ensemble import EnsembleDetector
 
 # Backward-compatibility aliases
@@ -26,7 +31,10 @@ __all__ = [
     "HFFDetector",
     "PPDocLayoutDetector",
     "Yolo11DocLayoutDetector",
+    "SuryaLayoutDetector",
     "EnsembleDetector",
+    "SURYA_HFF_CLASS_IDS",
+    "SURYA_LABEL_TO_OUR_CLASS",
     "DOCLAYOUT_YOLO_CLASS_NAMES",
     "DOCLAYOUT_YOLO_HFF_CLASSES",
     "PP_DOCLAYOUT_HFF_CLASSES",

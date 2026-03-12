@@ -4,6 +4,7 @@ Example script to remove headers, footers, and footnotes from images in a direct
 Supports multiple detector backends:
 - DocLayout-YOLO (default)
 - PP-DocLayout-L (PaddlePaddle)
+- Surya Layout
 - Ensemble (both detectors combined)
 
 Usage:
@@ -36,6 +37,7 @@ from hff_remover.detector import (
     HFFDetector,
     PPDocLayoutDetector,
     Yolo11DocLayoutDetector,
+    SuryaLayoutDetector,
     EnsembleDetector,
     BaseHFFDetector,
 )
@@ -80,7 +82,7 @@ def create_detector(
 
     Args:
         detector_type: Type of detector
-            ('yolo', 'yolo11', 'paddle', 'ensemble', 'cascade').
+            ('yolo', 'yolo11', 'paddle', 'ensemble', 'cascade', 'surya').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold.
 
@@ -137,6 +139,12 @@ def create_detector(
             merge_strategy="cascade",
         )
 
+    elif detector_type == "surya":
+        print("Using Surya Layout detector")
+        return SuryaLayoutDetector(
+            confidence_threshold=confidence,
+        )
+
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
 
@@ -157,7 +165,7 @@ def process_directory(
     Args:
         input_dir: Path to input directory containing images.
         output_dir: Path to output directory for processed images.
-        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade').
+        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade', 'surya').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold for detections.
         margin: Extra pixels to add around detected regions.
@@ -257,9 +265,10 @@ def main(input_dir: str, output_dir: str):
     #   "yolo"     - DocLayout-YOLO (fast, good general performance)
     #   "yolo11"   - YOLO11 DocLayout (explicit header/footer/footnote classes)
     #   "paddle"   - PP-DocLayout-L (higher precision, 23 classes)
+    #   "surya"    - Surya Layout (string-label based layout analysis)
     #   "ensemble" - Both detectors, merge results (best recall)
     #   "cascade"  - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "yolo11"
+    detector_type = "surya"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cpu"
