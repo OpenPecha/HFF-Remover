@@ -277,7 +277,7 @@ def main(input_dir: str, output_dir: str):
     confidence = 0.3
     
     # Margin around detected regions in pixels
-    margin = 0
+    margin = 200
 
     # Save inference as COCO dataset
     output_format = "coco"
