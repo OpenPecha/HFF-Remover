@@ -129,7 +129,7 @@ class Yolo11DocLayoutDetector(BaseHFFDetector):
         """
         class_id = int(raw_label)
 
-        class_name = YOLO11_DOCLAYOUT_HFF_CLASSES[class_id]
+        class_name = YOLO11_DOCLAYOUT_CLASS_NAMES[class_id]
         return _YOLO11_LABEL_MAP.get(class_name)
 
     def _extract_hff_detections(

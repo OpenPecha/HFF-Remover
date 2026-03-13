@@ -1,11 +1,13 @@
 """Ensemble detector that combines results from multiple detectors."""
 
 from pathlib import Path
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Optional, Union
 
 import numpy as np
 
 from hff_remover.detector._base import BaseHFFDetector
+
+_CANONICAL_LABELS = {"header", "footer", "footnote", "text-area"}
 
 
 class EnsembleDetector(BaseHFFDetector):
@@ -28,6 +30,24 @@ class EnsembleDetector(BaseHFFDetector):
         self.detectors = detectors
         self.merge_strategy = merge_strategy
         self.iou_threshold = iou_threshold
+
+    def _normalize_detection_label(self, raw_label: Union[int, str]) -> Optional[str]:
+        """Validate an already-normalised label from a child detector.
+
+        Child detectors normalise labels in their own ``detect()`` calls,
+        so the ensemble only needs to confirm the label is one of the
+        canonical HFF values.
+
+        Args:
+            raw_label: The label string (expected to be pre-normalised).
+
+        Returns:
+            The label unchanged if canonical, otherwise ``None``.
+        """
+        label = str(raw_label)
+        if label in _CANONICAL_LABELS:
+            return label
+        return None
 
     def detect(
         self,

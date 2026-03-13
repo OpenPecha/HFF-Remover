@@ -13,6 +13,11 @@ Usage:
     Or modify settings in the main block.
 """
 
+# Suppress noisy warnings (ccache from PaddlePaddle, CUDA driver mismatch on CPU-only runs)
+import warnings
+warnings.filterwarnings("ignore", message="No ccache found")
+warnings.filterwarnings("ignore", message="CUDA initialization")
+
 # MUST be set before any paddle imports to disable oneDNN and PIR (avoids PaddlePaddle bugs)
 import os
 os.environ['FLAGS_use_mkldnn'] = '0'
@@ -121,8 +126,16 @@ def create_detector(
             confidence_threshold=confidence,
             use_gpu=(device == "cuda"),
         )
+        surya = SuryaLayoutDetector(
+            confidence_threshold=confidence,
+        )
+        yolo11 = Yolo11DocLayoutDetector(
+            model_variant="nano",
+            device=device,
+            confidence_threshold=confidence,
+        )
         return EnsembleDetector(
-            detectors=[yolo, paddle],
+            detectors=[yolo, paddle, surya, yolo11],
             merge_strategy="union",
         )
 
@@ -235,7 +248,7 @@ def process_directory(
                     )
                 except Exception as e:
                     print(f"\nWarning: failed to write inference sample for {image_path}: {e}")
-            stats["processed"] += 1
+                stats["processed"] += 1
 
         except Exception as e:
             print(f"\nError processing {image_path}: {e}")
@@ -268,7 +281,7 @@ def main(input_dir: str, output_dir: str):
     #   "surya"    - Surya Layout (string-label based layout analysis)
     #   "ensemble" - Both detectors, merge results (best recall)
     #   "cascade"  - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "surya"
+    detector_type = "ensemble"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cpu"
@@ -311,5 +324,5 @@ def main(input_dir: str, output_dir: str):
 
 if __name__ == "__main__":
     input_dir = './data/images'    # Directory containing input images
-    output_dir = './data/inference'  # Directory for output images
+    output_dir = './data/yolo11_inference'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)
