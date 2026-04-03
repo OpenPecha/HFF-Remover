@@ -20,6 +20,15 @@ from hff_remover.detector._surya_layout import (
     SURYA_HFF_CLASS_IDS,
     SURYA_LABEL_TO_OUR_CLASS,
 )
+from hff_remover.detector._eric_yolo import (
+    EricYoloDetector,
+    ERIC_YOLO_CLASS_NAMES,
+    ERIC_YOLO_HFF_CLASSES,
+    ERIC_YOLO_MODEL_TO_COCO,
+    ERIC_YOLO_DEBUG_COLOR_MAP,
+    merge_boxes_by_class,
+    draw_bboxes,
+)
 from hff_remover.detector._ensemble import EnsembleDetector
 
 # Backward-compatibility aliases
@@ -32,7 +41,14 @@ __all__ = [
     "PPDocLayoutDetector",
     "Yolo11DocLayoutDetector",
     "SuryaLayoutDetector",
+    "EricYoloDetector",
     "EnsembleDetector",
+    "ERIC_YOLO_CLASS_NAMES",
+    "ERIC_YOLO_HFF_CLASSES",
+    "ERIC_YOLO_MODEL_TO_COCO",
+    "ERIC_YOLO_DEBUG_COLOR_MAP",
+    "merge_boxes_by_class",
+    "draw_bboxes",
     "SURYA_HFF_CLASS_IDS",
     "SURYA_LABEL_TO_OUR_CLASS",
     "DOCLAYOUT_YOLO_CLASS_NAMES",

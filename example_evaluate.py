@@ -224,10 +224,10 @@ if __name__ == "__main__":
     gt_dir = "./data/benchmark_dataset/label"
 
     # Prediction labels produced by running example.py (COCO writer output)
-    pred_dir = "./data/yolo11_inference/labels"
+    pred_dir = "./data/eric_yolo_inference/labels"
 
     # Where to save the evaluation report
-    report_path = "./data/yolo11_report.txt"
+    report_path = "./data/eric_yolo_report.txt"
 
     # ======================================================================
 
