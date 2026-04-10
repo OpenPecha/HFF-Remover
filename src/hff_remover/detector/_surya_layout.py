@@ -114,6 +114,7 @@ class SuryaLayoutDetector(BaseHFFDetector):
         image: Union[str, Path, np.ndarray],
         image_size: int = 1024,
         filter_to_hff_only: bool = True,
+        normalize_bbox: bool = True,
     ) -> List[Dict[str, Any]]:
         """Detect headers, footers, and footnotes in an image.
 
@@ -122,6 +123,11 @@ class SuryaLayoutDetector(BaseHFFDetector):
             image_size: Kept for API compatibility (unused by Surya).
             filter_to_hff_only: When ``True`` only HFF-mapped classes are
                 kept; when ``False`` unmapped labels default to ``"text"``.
+            normalize_bbox: When ``True`` (default), ``bbox`` is an
+                axis-aligned ``[x1, y1, x2, y2]`` list.  When ``False``,
+                ``bbox`` contains the raw polygon corners
+                ``[[x1,y1],[x2,y2],[x3,y3],[x4,y4]]`` as returned by
+                Surya, which may represent a rotated quadrilateral.
 
         Returns:
             List of detection dicts with ``bbox``, ``class_id``,
@@ -156,11 +162,13 @@ class SuryaLayoutDetector(BaseHFFDetector):
             else:
                 raw_label = getattr(item, "label", "")
 
-            # --- extract bbox ---
+            # --- extract bbox and polygon ---
             if isinstance(item, dict):
-                bbox = item.get("bbox")
+                raw_polygon = item.get("polygon")
+                raw_bbox = item.get("bbox")
             else:
-                bbox = getattr(item, "bbox", None)
+                raw_polygon = getattr(item, "polygon", None)
+                raw_bbox = getattr(item, "bbox", None)
 
             # --- extract confidence ---
             if isinstance(item, dict):
@@ -200,21 +208,21 @@ class SuryaLayoutDetector(BaseHFFDetector):
                 continue
             our_class_id, our_class_name = mapped
 
-            # --- normalise bbox to [x1, y1, x2, y2] ---
-            if not bbox or len(bbox) < 4:
+            # --- build output bbox ---
+            if not raw_bbox or len(raw_bbox) < 4:
                 continue
-            bbox = list(bbox)
-            if len(bbox) == 4:
-                bbox = list(map(float, bbox))
-            elif len(bbox) == 8:
-                xs, ys = bbox[0::2], bbox[1::2]
-                bbox = [min(xs), min(ys), max(xs), max(ys)]
+
+            if normalize_bbox:
+                output_bbox: Any = list(map(float, raw_bbox))
             else:
-                continue
+                if raw_polygon and len(raw_polygon) == 4:
+                    output_bbox = [[float(c) for c in pt] for pt in raw_polygon]
+                else:
+                    output_bbox = list(map(float, raw_bbox))
 
             detections.append(
                 {
-                    "bbox": bbox,
+                    "bbox": output_bbox,
                     "class_id": our_class_id,
                     "class_name": our_class_name,
                     "confidence": conf,
@@ -228,6 +236,7 @@ class SuryaLayoutDetector(BaseHFFDetector):
         images: List[Union[str, Path, np.ndarray]],
         image_size: int = 1024,
         batch_size: int = 8,
+        normalize_bbox: bool = True,
     ) -> List[List[Dict[str, Any]]]:
         """Detect headers, footers, and footnotes in multiple images.
 
@@ -236,17 +245,24 @@ class SuryaLayoutDetector(BaseHFFDetector):
             image_size: Kept for API compatibility (unused by Surya).
             batch_size: Kept for API compatibility (Surya handles batching
                 internally).
+            normalize_bbox: When ``True`` (default), bboxes are
+                axis-aligned ``[x1, y1, x2, y2]``.  When ``False``,
+                bboxes are raw polygon corners from Surya.
 
         Returns:
             List of detection lists, one per input image.
         """
         _ = image_size, batch_size
-        return [self.detect(image) for image in images]
+        return [
+            self.detect(image, normalize_bbox=normalize_bbox)
+            for image in images
+        ]
 
     def get_all_detections(
         self,
         image: Union[str, Path, np.ndarray],
         image_size: int = 1024,
+        normalize_bbox: bool = True,
     ) -> List[Dict[str, Any]]:
         """Return all document-layout detections (not just HFF).
 
@@ -255,8 +271,16 @@ class SuryaLayoutDetector(BaseHFFDetector):
         Args:
             image: Numpy array (BGR format) of the image.
             image_size: Kept for API compatibility (unused by Surya).
+            normalize_bbox: When ``True`` (default), bboxes are
+                axis-aligned ``[x1, y1, x2, y2]``.  When ``False``,
+                bboxes are raw polygon corners from Surya.
 
         Returns:
             List of detection dicts for all Surya layout classes.
         """
-        return self.detect(image, image_size=image_size, filter_to_hff_only=False)
+        return self.detect(
+            image,
+            image_size=image_size,
+            filter_to_hff_only=False,
+            normalize_bbox=normalize_bbox,
+        )

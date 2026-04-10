@@ -243,7 +243,7 @@ def process_directory(
             image = load_image(image_path)
 
             # Detect HFF regions
-            detections = detector.detect(image)
+            detections = detector.detect(image, normalize_bbox=False)
             detections = processor.merge_nearby_detections(detections)
             stats["total_detections"] += len(detections)
 
@@ -291,7 +291,7 @@ def main(input_dir: str, output_dir: str):
     #   "eric_yolo"  - Eric's tiled YOLO11-nano (640x640 tile-based inference)
     #   "ensemble"   - Both detectors, merge results (best recall)
     #   "cascade"    - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "eric_yolo"
+    detector_type = "surya"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cpu"

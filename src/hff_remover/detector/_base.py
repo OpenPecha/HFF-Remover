@@ -41,7 +41,11 @@ class BaseHFFDetector(ABC):
 
         Returns:
             List of detection dictionaries with keys:
-                - bbox: [x1, y1, x2, y2] bounding box coordinates
+                - bbox: Bounding box coordinates.  By default this is an
+                  axis-aligned ``[x1, y1, x2, y2]`` list.  Subclasses
+                  that accept a ``normalize_bbox`` parameter may return
+                  polygon corners ``[[x1,y1],[x2,y2],[x3,y3],[x4,y4]]``
+                  when ``normalize_bbox=False``.
                 - class_id: Class ID of the detection
                 - class_name: Human-readable class name
                 - confidence: Confidence score

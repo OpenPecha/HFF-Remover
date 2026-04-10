@@ -12,6 +12,25 @@ import cv2
 from hff_remover.utils import save_image
 
 
+def _to_xyxy(bbox: list) -> List[float]:
+    """Convert a bbox in either format to axis-aligned ``[x1, y1, x2, y2]``.
+
+    Accepts both ``[x1, y1, x2, y2]`` (flat, 4 floats) and
+    ``[[x1,y1], [x2,y2], [x3,y3], [x4,y4]]`` (polygon corners).
+
+    Args:
+        bbox: Bounding box in either format.
+
+    Returns:
+        Axis-aligned bounding box as ``[x_min, y_min, x_max, y_max]``.
+    """
+    if bbox and isinstance(bbox[0], (list, tuple)):
+        xs = [pt[0] for pt in bbox]
+        ys = [pt[1] for pt in bbox]
+        return [float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))]
+    return [float(v) for v in bbox]
+
+
 class HFFProcessor:
     """Processor for merging nearby detections of the same class."""
 
@@ -118,7 +137,7 @@ class HFFProcessor:
         merged: List[Dict[str, Any]] = []
 
         for class_name, class_dets in groups.items():
-            boxes: List[List[float]] = [list(d["bbox"]) for d in class_dets]
+            boxes: List[List[float]] = [_to_xyxy(d["bbox"]) for d in class_dets]
             confs: List[float] = [d.get("confidence", 1.0) for d in class_dets]
             class_ids: List[Any] = [d.get("class_id") for d in class_dets]
 
@@ -266,15 +285,17 @@ class COCODatasetWriter:
         label_lines: List[str] = []
         for det in detections:
             bbox = det.get("bbox")
-            if not bbox or len(bbox) != 4:
+            if not bbox:
                 continue
+
+            xyxy = _to_xyxy(bbox)
 
             class_name = det.get("class_name")
             if not class_name:
                 class_name = str(det.get("class_id", "unknown"))
 
             class_id = self._class_id_for(str(class_name))
-            xc, yc, bw, bh = _xyxy_to_yolo_xywh_norm(list(map(float, bbox)), w, h)
+            xc, yc, bw, bh = _xyxy_to_yolo_xywh_norm(xyxy, w, h)
             label_lines.append(f"{class_id} {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
 
         label_out_path.write_text("\n".join(label_lines) + ("\n" if label_lines else ""), encoding="utf-8")
@@ -364,17 +385,22 @@ class MaskedInferenceImageWriter:
                     continue
 
             bbox = detection["bbox"]
-            x1, y1, x2, y2 = map(int, bbox)
-
-            x1 = max(0, x1 - margin)
-            y1 = max(0, y1 - margin)
-            x2 = min(width, x2 + margin)
-            y2 = min(height, y2 + margin)
-
             bgr_color = MaskedInferenceImageWriter._color_for_class(
                 detection.get("class_name", ""),
             )
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr_color, -1)
+
+            if bbox and isinstance(bbox[0], (list, tuple)):
+                pts = np.array(
+                    [[int(c) for c in pt] for pt in bbox], dtype=np.int32,
+                )
+                cv2.fillPoly(overlay, [pts], bgr_color)
+            else:
+                x1, y1, x2, y2 = map(int, bbox)
+                x1 = max(0, x1 - margin)
+                y1 = max(0, y1 - margin)
+                x2 = min(width, x2 + margin)
+                y2 = min(height, y2 + margin)
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr_color, -1)
 
         cv2.addWeighted(
             overlay, overlay_alpha, result, 1 - overlay_alpha, 0, result,

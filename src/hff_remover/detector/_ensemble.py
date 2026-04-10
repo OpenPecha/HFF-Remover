@@ -10,6 +10,15 @@ from hff_remover.detector._base import BaseHFFDetector
 _CANONICAL_LABELS = {"header", "footer", "footnote", "text-area"}
 
 
+def _to_xyxy(bbox: list) -> list:
+    """Convert a bbox in either format to axis-aligned ``[x1, y1, x2, y2]``."""
+    if bbox and isinstance(bbox[0], (list, tuple)):
+        xs = [pt[0] for pt in bbox]
+        ys = [pt[1] for pt in bbox]
+        return [float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))]
+    return [float(v) for v in bbox]
+
+
 class EnsembleDetector(BaseHFFDetector):
     """Ensemble detector that combines results from multiple detectors."""
 
@@ -130,17 +139,19 @@ class EnsembleDetector(BaseHFFDetector):
 
         return keep
 
-    def _compute_iou(self, box1: List[float], box2: List[float]) -> float:
-        """Compute IoU between two boxes."""
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
+    def _compute_iou(self, box1: list, box2: list) -> float:
+        """Compute IoU between two boxes (accepts polygon or xyxy format)."""
+        b1 = _to_xyxy(box1)
+        b2 = _to_xyxy(box2)
+        x1 = max(b1[0], b2[0])
+        y1 = max(b1[1], b2[1])
+        x2 = min(b1[2], b2[2])
+        y2 = min(b1[3], b2[3])
 
         inter_area = max(0, x2 - x1) * max(0, y2 - y1)
 
-        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        box1_area = (b1[2] - b1[0]) * (b1[3] - b1[1])
+        box2_area = (b2[2] - b2[0]) * (b2[3] - b2[1])
 
         union_area = box1_area + box2_area - inter_area
 
