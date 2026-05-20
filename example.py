@@ -44,6 +44,7 @@ from hff_remover.detector import (
     Yolo11DocLayoutDetector,
     SuryaLayoutDetector,
     EricYoloDetector,
+    TDLADetector,
     EnsembleDetector,
     BaseHFFDetector,
 )
@@ -88,7 +89,8 @@ def create_detector(
 
     Args:
         detector_type: Type of detector
-            ('yolo', 'yolo11', 'paddle', 'ensemble', 'cascade', 'surya', 'eric_yolo').
+            ('yolo', 'yolo11', 'paddle', 'ensemble', 'cascade', 'surya',
+             'eric_yolo', 'tdla').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold.
 
@@ -167,6 +169,14 @@ def create_detector(
             confidence_threshold=confidence,
         )
 
+    elif detector_type == "tdla":
+        print("Using TDLA (Tibetan Document Layout Analysis) YOLO26 detector")
+        return TDLADetector(
+            model_path="data/TDLA-v7.pt",
+            device=device,
+            confidence_threshold=confidence,
+        )
+
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
 
@@ -187,7 +197,7 @@ def process_directory(
     Args:
         input_dir: Path to input directory containing images.
         output_dir: Path to output directory for processed images.
-        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade', 'surya', 'eric_yolo').
+        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade', 'surya', 'eric_yolo', 'tdla').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold for detections.
         margin: Extra pixels to add around detected regions.
@@ -289,9 +299,10 @@ def main(input_dir: str, output_dir: str):
     #   "paddle"   - PP-DocLayout-L (higher precision, 23 classes)
     #   "surya"      - Surya Layout (string-label based layout analysis)
     #   "eric_yolo"  - Eric's tiled YOLO11-nano (640x640 tile-based inference)
+    #   "tdla"       - TDLA YOLO26 (Tibetan Document Layout Analysis, 4 classes)
     #   "ensemble"   - Both detectors, merge results (best recall)
     #   "cascade"    - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "surya"
+    detector_type = "tdla"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cpu"
@@ -334,5 +345,5 @@ def main(input_dir: str, output_dir: str):
 
 if __name__ == "__main__":
     input_dir = './data/benchmark_dataset/images'    # Directory containing input images
-    output_dir = './data/eric_yolo_inference'  # Directory for output images
+    output_dir = './data/tdla_yolo_inference'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)

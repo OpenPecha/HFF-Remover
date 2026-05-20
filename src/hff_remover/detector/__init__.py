@@ -29,6 +29,14 @@ from hff_remover.detector._eric_yolo import (
     merge_boxes_by_class,
     draw_bboxes,
 )
+from hff_remover.detector._tdla_yolo import (
+    TDLADetector,
+    TDLA_CLASS_NAMES,
+    TDLA_HFF_CLASSES,
+    TDLA_MODEL_TO_COCO,
+    TDLA_DEBUG_COLOR_MAP,
+    draw_tdla_bboxes,
+)
 from hff_remover.detector._ensemble import EnsembleDetector
 
 # Backward-compatibility aliases
@@ -42,6 +50,7 @@ __all__ = [
     "Yolo11DocLayoutDetector",
     "SuryaLayoutDetector",
     "EricYoloDetector",
+    "TDLADetector",
     "EnsembleDetector",
     "ERIC_YOLO_CLASS_NAMES",
     "ERIC_YOLO_HFF_CLASSES",
@@ -56,6 +65,11 @@ __all__ = [
     "PP_DOCLAYOUT_HFF_CLASSES",
     "YOLO11_DOCLAYOUT_CLASS_NAMES",
     "YOLO11_DOCLAYOUT_HFF_CLASSES",
+    "TDLA_CLASS_NAMES",
+    "TDLA_HFF_CLASSES",
+    "TDLA_MODEL_TO_COCO",
+    "TDLA_DEBUG_COLOR_MAP",
+    "draw_tdla_bboxes",
     "CLASS_NAMES",
     "HFF_CLASSES",
 ]
