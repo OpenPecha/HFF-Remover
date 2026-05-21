@@ -20,20 +20,22 @@ warnings.filterwarnings("ignore", message="CUDA initialization")
 
 # MUST be set before any paddle imports to disable oneDNN and PIR (avoids PaddlePaddle bugs)
 import os
-import time
 os.environ['FLAGS_use_mkldnn'] = '0'
-os.environ['FLAGS_enable_pir_api'] = '0'  # Disable PIR (fixes ConvertPirAttribute error)
+os.environ['FLAGS_enable_pir_api'] = '0'
 os.environ['FLAGS_enable_pir_in_executor'] = '0'
 os.environ['FLAGS_pir_apply_inplace_pass'] = '0'
 os.environ['DNNL_VERBOSE'] = '0'
 os.environ['FLAGS_use_onednn'] = '0'
 os.environ['PADDLE_USE_PIR'] = '0'
 
-# Force CPU mode for paddle
-import paddle
-paddle.set_device('cpu')
+try:
+    import paddle
+    paddle.set_device('cpu')
+except ModuleNotFoundError:
+    pass
 
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -191,6 +193,7 @@ def process_directory(
     margin: int = 0,
     output_format: str = "coco",
     inference_dir: Optional[str] = None,
+    batch_size: int = 8,
 ) -> dict:
     """
     Process all images in a directory to remove headers, footers, and footnotes.
@@ -202,6 +205,9 @@ def process_directory(
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold for detections.
         margin: Extra pixels to add around detected regions.
+        output_format: Output format ('coco', 'masked', or 'both').
+        inference_dir: Directory for inference output (defaults to output_dir).
+        batch_size: Number of images per batch for ``detect_batch``.
 
     Returns:
         Dictionary with processing statistics.
@@ -246,24 +252,39 @@ def process_directory(
         "failed_files": [],
     }
 
-    # Process each image with progress bar
-    print("\nProcessing images...")
-    detect_times: list[float] = []
-    total_start = time.perf_counter()
-    for image_path in tqdm(images, desc="Processing"):
+    # Pre-load all images
+    print("\nLoading images...")
+    loaded_images = []
+    valid_paths: List[Path] = []
+    for image_path in tqdm(images, desc="Loading"):
         try:
-            # Load image
-            image = load_image(image_path)
-            t0 = time.perf_counter()
+            loaded_images.append(load_image(image_path))
+            valid_paths.append(image_path)
+        except Exception as e:
+            print(f"\nError loading {image_path}: {e}")
+            stats["failed"] += 1
+            stats["failed_files"].append(str(image_path))
 
-            # Detect HFF regions
-            detections = detector.detect(image, normalize_bbox=False)
-            t1 = time.perf_counter()
-            detect_times.append(t1 - t0)
+    if not loaded_images:
+        print("No images could be loaded!")
+        return stats
+
+    # Batch detection
+    print(f"\nRunning batch detection on {len(loaded_images)} images (batch_size={batch_size})...")
+    total_start = time.perf_counter()
+    batch_results = detector.detect_batch(
+        loaded_images,
+        batch_size=batch_size,
+    )
+    total_elapsed = time.perf_counter() - total_start
+
+    # Post-process each result
+    print("\nPost-processing detections...")
+    for image, image_path, detections in zip(loaded_images, valid_paths, batch_results):
+        try:
             detections = processor.merge_nearby_detections(detections)
             stats["total_detections"] += len(detections)
 
-            # Write inference output (each writer handles its own format)
             for writer in writers:
                 try:
                     writer.write_sample(
@@ -273,24 +294,20 @@ def process_directory(
                     )
                 except Exception as e:
                     print(f"\nWarning: failed to write inference sample for {image_path}: {e}")
-                stats["processed"] += 1
+            stats["processed"] += 1
 
         except Exception as e:
             print(f"\nError processing {image_path}: {e}")
             stats["failed"] += 1
             stats["failed_files"].append(str(image_path))
-        
-    total_elapsed = time.perf_counter() - total_start
-    if detect_times:
-        avg_ms = (sum(detect_times) / len(detect_times)) * 1000
-        min_ms = min(detect_times) * 1000
-        max_ms = max(detect_times) * 1000
+
+    n_inferred = len(loaded_images)
+    if n_inferred:
+        avg_ms = (total_elapsed / n_inferred) * 1000
         print(f"\n--- Inference timing ---")
         print(f"  Total wall time : {total_elapsed:.2f} s")
-        print(f"  Images inferred : {len(detect_times)}")
+        print(f"  Images inferred : {n_inferred}")
         print(f"  Avg per image   : {avg_ms:.1f} ms")
-        print(f"  Min / Max       : {min_ms:.1f} ms / {max_ms:.1f} ms")
-
 
     return stats
 
@@ -323,7 +340,7 @@ def main(input_dir: str, output_dir: str):
     detector_type = "tdla"
     
     # Device: "cpu" or "cuda" (for GPU)
-    device = "cpu"
+    device = "cuda"
     
     # Confidence threshold (0.0 - 1.0)
     confidence = 0.3
@@ -333,6 +350,9 @@ def main(input_dir: str, output_dir: str):
 
     # Save inference as COCO dataset
     output_format = "coco"
+
+    # Batch size for detect_batch (higher = more GPU memory, faster throughput)
+    batch_size = 8
     
     # ==========================================================================
 
@@ -345,6 +365,7 @@ def main(input_dir: str, output_dir: str):
         confidence=confidence,
         margin=margin,
         output_format=output_format,
+        batch_size=batch_size,
     )
 
     # Print summary
@@ -362,6 +383,6 @@ def main(input_dir: str, output_dir: str):
 
 
 if __name__ == "__main__":
-    input_dir = './data/benchmark_dataset/images'    # Directory containing input images
-    output_dir = './data/benchmark_dataset_inference'  # Directory for output images
+    input_dir = './data/images'    # Directory containing input images
+    output_dir = './data/samples_inference'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)

@@ -177,6 +177,26 @@ class TDLADetector(BaseHFFDetector):
     # Full-image inference
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _parse_single_result(
+        result: Any,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Extract numpy arrays from a single YOLO ``Results`` object.
+
+        Args:
+            result: One element from the list returned by ``model()``.
+
+        Returns:
+            Tuple of ``(boxes, scores, classes)`` arrays.
+        """
+        if result.boxes is None or len(result.boxes) == 0:
+            return np.empty((0, 4)), np.empty(0), np.empty(0, dtype=int)
+
+        boxes = result.boxes.xyxy.cpu().numpy()
+        scores = result.boxes.conf.cpu().numpy()
+        classes = result.boxes.cls.cpu().numpy().astype(int)
+        return boxes, scores, classes
+
     def _run_inference(
         self,
         image: Union[str, Path, np.ndarray],
@@ -198,16 +218,8 @@ class TDLADetector(BaseHFFDetector):
             conf=self.confidence_threshold,
             device=self.device,
             verbose=False,
-        )[0]
-
-        if results.boxes is None or len(results.boxes) == 0:
-            return np.empty((0, 4)), np.empty(0), np.empty(0, dtype=int)
-
-        boxes = results.boxes.xyxy.cpu().numpy()
-        scores = results.boxes.conf.cpu().numpy()
-        classes = results.boxes.cls.cpu().numpy().astype(int)
-
-        return boxes, scores, classes
+        )
+        return self._parse_single_result(results[0])
 
     # ------------------------------------------------------------------
     # Helpers to build detection dicts
@@ -313,16 +325,44 @@ class TDLADetector(BaseHFFDetector):
     ) -> List[List[Dict[str, Any]]]:
         """Detect headers, footers, and footnotes in multiple images.
 
+        Images are passed to the YOLO model in chunks of ``batch_size``
+        so the GPU can process them in parallel, rather than running a
+        separate inference pass per image.
+
         Args:
             images: List of image paths or BGR numpy arrays.
             image_size: Image size for inference.
-            batch_size: Unused (kept for API compatibility).
-            **kwargs: Forwarded to :meth:`detect`.
+            batch_size: Number of images per GPU inference call.
+            **kwargs: Accepted for API compatibility; ignored.
 
         Returns:
             List of detection lists, one per input image.
         """
-        return [self.detect(img, image_size=image_size, **kwargs) for img in images]
+        loaded = [self._load_image(img) for img in images]
+
+        all_detections: List[List[Dict[str, Any]]] = []
+        for i in range(0, len(loaded), batch_size):
+            chunk = loaded[i : i + batch_size]
+
+            results = self.model(
+                chunk,
+                imgsz=image_size,
+                conf=self.confidence_threshold,
+                device=self.device,
+                verbose=False,
+            )
+
+            for result in results:
+                boxes, scores, classes = self._parse_single_result(result)
+                if len(boxes) > 0:
+                    boxes, scores, classes = merge_boxes_by_class(
+                        boxes, scores, classes, margin=self.merge_margin,
+                    )
+                all_detections.append(
+                    self._boxes_to_hff_detections(boxes, scores, classes)
+                )
+
+        return all_detections
 
     # ------------------------------------------------------------------
     # Extra utility
