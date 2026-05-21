@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", message="CUDA initialization")
 
 # MUST be set before any paddle imports to disable oneDNN and PIR (avoids PaddlePaddle bugs)
 import os
+import time
 os.environ['FLAGS_use_mkldnn'] = '0'
 os.environ['FLAGS_enable_pir_api'] = '0'  # Disable PIR (fixes ConvertPirAttribute error)
 os.environ['FLAGS_enable_pir_in_executor'] = '0'
@@ -247,13 +248,18 @@ def process_directory(
 
     # Process each image with progress bar
     print("\nProcessing images...")
+    detect_times: list[float] = []
+    total_start = time.perf_counter()
     for image_path in tqdm(images, desc="Processing"):
         try:
             # Load image
             image = load_image(image_path)
+            t0 = time.perf_counter()
 
             # Detect HFF regions
             detections = detector.detect(image, normalize_bbox=False)
+            t1 = time.perf_counter()
+            detect_times.append(t1 - t0)
             detections = processor.merge_nearby_detections(detections)
             stats["total_detections"] += len(detections)
 
@@ -273,6 +279,18 @@ def process_directory(
             print(f"\nError processing {image_path}: {e}")
             stats["failed"] += 1
             stats["failed_files"].append(str(image_path))
+        
+    total_elapsed = time.perf_counter() - total_start
+    if detect_times:
+        avg_ms = (sum(detect_times) / len(detect_times)) * 1000
+        min_ms = min(detect_times) * 1000
+        max_ms = max(detect_times) * 1000
+        print(f"\n--- Inference timing ---")
+        print(f"  Total wall time : {total_elapsed:.2f} s")
+        print(f"  Images inferred : {len(detect_times)}")
+        print(f"  Avg per image   : {avg_ms:.1f} ms")
+        print(f"  Min / Max       : {min_ms:.1f} ms / {max_ms:.1f} ms")
+
 
     return stats
 
@@ -345,5 +363,5 @@ def main(input_dir: str, output_dir: str):
 
 if __name__ == "__main__":
     input_dir = './data/benchmark_dataset/images'    # Directory containing input images
-    output_dir = './data/tdla_yolo_inference'  # Directory for output images
+    output_dir = './data/benchmark_dataset_inference'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)
