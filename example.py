@@ -313,7 +313,24 @@ def process_directory(
 
 
 def main(input_dir: str, output_dir: str):
-    """Main entry point."""
+    """Main entry point.
+
+    Image format expected by all detectors
+    ----------------------------------------
+    ``load_image`` (used in the loop below) returns images that are already
+    in the correct format for every detector backend:
+
+    - **Layout**: ``(H, W, C)`` — height-first NumPy convention.
+    - **Channels**: 3 (BGR colour order, as produced by ``cv2.imread``).
+      Grayscale inputs are expanded to 3 channels automatically.
+    - **Dtype**: ``numpy.uint8`` — pixel values in ``[0, 255]``.
+    - **Resolution**: arbitrary; each detector rescales internally to its
+      own ``image_size`` (e.g. 640 for TDLA, 1024 for DocLayout-YOLO).
+      Passing higher-resolution originals preserves bbox accuracy.
+
+    If you supply a pre-loaded ``np.ndarray`` directly (bypassing
+    ``load_image``), make sure it matches the spec above.
+    """
 
     # Check input directory exists
     if not Path(input_dir).exists():

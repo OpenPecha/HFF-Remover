@@ -36,7 +36,19 @@ class BaseHFFDetector(ABC):
         """Detect headers, footers, and footnotes in an image.
 
         Args:
-            image: Path to image file or numpy array.
+            image: Path to an image file, a ``pathlib.Path``, or a
+                pre-loaded NumPy array.  When an array is supplied it
+                **must** satisfy:
+
+                * **Shape** — ``(H, W, 3)``, i.e. height × width × 3
+                  BGR channels (the OpenCV default).
+                * **Dtype** — ``numpy.uint8`` (pixel values 0–255).
+                * **Colour order** — BGR (not RGB).  If your image
+                  comes from PIL / matplotlib, convert with
+                  ``cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)`` first.
+                * **Resolution** — arbitrary; the detector rescales
+                  internally to *image_size*.
+
             image_size: Input size for the model.
 
         Returns:

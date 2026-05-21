@@ -54,15 +54,20 @@ def load_image(
     path: Union[str, Path],
     color_mode: str = "bgr",
 ) -> np.ndarray:
-    """
-    Load an image from disk.
+    """Load an image from disk.
 
     Args:
         path: Path to the image file.
-        color_mode: Color mode ('bgr', 'rgb', or 'gray').
+        color_mode: Color mode (``"bgr"``, ``"rgb"``, or ``"gray"``).
 
     Returns:
-        Image as numpy array.
+        A ``numpy.uint8`` array whose layout depends on *color_mode*:
+
+        * ``"bgr"``  (default) → ``(H, W, 3)`` in BGR channel order.
+        * ``"rgb"``            → ``(H, W, 3)`` in RGB channel order.
+        * ``"gray"``           → ``(H, W)`` single-channel.
+
+        All detector backends expect the default ``"bgr"`` output.
 
     Raises:
         FileNotFoundError: If the image file doesn't exist.
