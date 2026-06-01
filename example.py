@@ -5,6 +5,7 @@ Supports multiple detector backends:
 - DocLayout-YOLO (default)
 - PP-DocLayout-L (PaddlePaddle)
 - Surya Layout
+- Surya2 Layout (SuryaInferenceManager-based)
 - Ensemble (both detectors combined)
 
 Usage:
@@ -46,6 +47,7 @@ from hff_remover.detector import (
     PPDocLayoutDetector,
     Yolo11DocLayoutDetector,
     SuryaLayoutDetector,
+    Surya2LayoutDetector,
     EricYoloDetector,
     TDLADetector,
     EnsembleDetector,
@@ -93,7 +95,7 @@ def create_detector(
     Args:
         detector_type: Type of detector
             ('yolo', 'yolo11', 'paddle', 'ensemble', 'cascade', 'surya',
-             'eric_yolo', 'tdla').
+             'surya2', 'eric_yolo', 'tdla').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold.
 
@@ -164,6 +166,13 @@ def create_detector(
             confidence_threshold=confidence,
         )
 
+    elif detector_type == "surya2":
+        print("Using Surya2 Layout detector (SuryaInferenceManager)")
+        return Surya2LayoutDetector(
+            confidence_threshold=confidence,
+            keep_server=True,
+        )
+
     elif detector_type == "eric_yolo":
         print("Using Eric's tiled YOLO11-nano HFF detector")
         return EricYoloDetector(
@@ -201,7 +210,7 @@ def process_directory(
     Args:
         input_dir: Path to input directory containing images.
         output_dir: Path to output directory for processed images.
-        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade', 'surya', 'eric_yolo', 'tdla').
+        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade', 'surya', 'surya2', 'eric_yolo', 'tdla').
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold for detections.
         margin: Extra pixels to add around detected regions.
@@ -349,12 +358,13 @@ def main(input_dir: str, output_dir: str):
     #   "yolo"     - DocLayout-YOLO (fast, good general performance)
     #   "yolo11"   - YOLO11 DocLayout (explicit header/footer/footnote classes)
     #   "paddle"   - PP-DocLayout-L (higher precision, 23 classes)
-    #   "surya"      - Surya Layout (string-label based layout analysis)
+    #   "surya"      - Surya Layout (FoundationPredictor-based layout analysis)
+    #   "surya2"     - Surya2 Layout (SuryaInferenceManager, newer API)
     #   "eric_yolo"  - Eric's tiled YOLO11-nano (640x640 tile-based inference)
     #   "tdla"       - TDLA YOLO26 (Tibetan Document Layout Analysis, 4 classes)
     #   "ensemble"   - Both detectors, merge results (best recall)
     #   "cascade"    - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "tdla"
+    detector_type = "surya2"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cuda"
@@ -400,6 +410,6 @@ def main(input_dir: str, output_dir: str):
 
 
 if __name__ == "__main__":
-    input_dir = './data/images'    # Directory containing input images
-    output_dir = './data/samples_inference'  # Directory for output images
+    input_dir = './data/test'    # Directory containing input images
+    output_dir = './data/surya2_inference'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)

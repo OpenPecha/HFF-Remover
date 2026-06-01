@@ -20,6 +20,11 @@ from hff_remover.detector._surya_layout import (
     SURYA_HFF_CLASS_IDS,
     SURYA_LABEL_TO_OUR_CLASS,
 )
+from hff_remover.detector._surya2_layout import (
+    Surya2LayoutDetector,
+    SURYA2_HFF_CLASS_IDS,
+    SURYA2_LABEL_TO_OUR_CLASS,
+)
 from hff_remover.detector._eric_yolo import (
     EricYoloDetector,
     ERIC_YOLO_CLASS_NAMES,
@@ -49,6 +54,7 @@ __all__ = [
     "PPDocLayoutDetector",
     "Yolo11DocLayoutDetector",
     "SuryaLayoutDetector",
+    "Surya2LayoutDetector",
     "EricYoloDetector",
     "TDLADetector",
     "EnsembleDetector",
@@ -60,6 +66,8 @@ __all__ = [
     "draw_bboxes",
     "SURYA_HFF_CLASS_IDS",
     "SURYA_LABEL_TO_OUR_CLASS",
+    "SURYA2_HFF_CLASS_IDS",
+    "SURYA2_LABEL_TO_OUR_CLASS",
     "DOCLAYOUT_YOLO_CLASS_NAMES",
     "DOCLAYOUT_YOLO_HFF_CLASSES",
     "PP_DOCLAYOUT_HFF_CLASSES",

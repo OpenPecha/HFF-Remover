@@ -221,13 +221,13 @@ if __name__ == "__main__":
     # ======================================================================
 
     # Ground-truth labels (benchmark dataset shipped with the repo)
-    gt_dir = "./data/benchmark_dataset/label"
+    gt_dir = "./data/test/labels"
 
     # Prediction labels produced by running example.py (COCO writer output)
-    pred_dir = "./data/tdla_yolo_inference/labels"
+    pred_dir = "./data/surya2_inference/labels"
 
     # Where to save the evaluation report
-    report_path = "./data/tlda_v7_report.txt"
+    report_path = "./data/surya2_report.txt"
 
     # ======================================================================
 
