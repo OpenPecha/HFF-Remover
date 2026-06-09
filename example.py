@@ -38,9 +38,7 @@ except ModuleNotFoundError:
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional
-
-from tqdm import tqdm
+from typing import Optional
 
 from hff_remover.detector import (
     HFFDetector,
@@ -55,7 +53,6 @@ from hff_remover.detector import (
 )
 from hff_remover.processor import (
     COCODatasetWriter,
-    HFFProcessor,
     MaskedInferenceImageWriter,
 )
 from hff_remover.utils import load_image, find_images
@@ -203,6 +200,7 @@ def process_directory(
     output_format: str = "coco",
     inference_dir: Optional[str] = None,
     batch_size: int = 8,
+    merge_nearby_detections: bool = True,
 ) -> dict:
     """
     Process all images in a directory to remove headers, footers, and footnotes.
@@ -217,6 +215,8 @@ def process_directory(
         output_format: Output format ('coco', 'masked', or 'both').
         inference_dir: Directory for inference output (defaults to output_dir).
         batch_size: Number of images per batch for ``detect_batch``.
+        merge_nearby_detections: Whether to merge nearby detections during
+            post-processing.
 
     Returns:
         Dictionary with processing statistics.
@@ -247,8 +247,6 @@ def process_directory(
     if output_format not in {"masked", "coco", "both"}:
         raise ValueError("output_format must be one of: masked, coco, both")
 
-    processor = HFFProcessor(margin=margin)
-
     writers = create_inference_writers(output_format, inference_dir, margin=margin)
     print("Model loaded successfully!")
 
@@ -261,37 +259,21 @@ def process_directory(
         "failed_files": [],
     }
 
-    # Pre-load all images
-    print("\nLoading images...")
-    loaded_images = []
-    valid_paths: List[Path] = []
-    for image_path in tqdm(images, desc="Loading"):
-        try:
-            loaded_images.append(load_image(image_path))
-            valid_paths.append(image_path)
-        except Exception as e:
-            print(f"\nError loading {image_path}: {e}")
-            stats["failed"] += 1
-            stats["failed_files"].append(str(image_path))
-
-    if not loaded_images:
-        print("No images could be loaded!")
-        return stats
-
     # Batch detection
-    print(f"\nRunning batch detection on {len(loaded_images)} images (batch_size={batch_size})...")
+    print(f"\nRunning batch detection on {len(images)} images (batch_size={batch_size})...")
     total_start = time.perf_counter()
     batch_results = detector.detect_batch(
-        loaded_images,
+        images,
         batch_size=batch_size,
+        merge_boxes=merge_nearby_detections,
     )
     total_elapsed = time.perf_counter() - total_start
 
     # Post-process each result
     print("\nPost-processing detections...")
-    for image, image_path, detections in zip(loaded_images, valid_paths, batch_results):
+    for image_path, detections in zip(images, batch_results):
         try:
-            detections = processor.merge_nearby_detections(detections)
+            image = load_image(image_path)
             stats["total_detections"] += len(detections)
 
             for writer in writers:
@@ -310,7 +292,7 @@ def process_directory(
             stats["failed"] += 1
             stats["failed_files"].append(str(image_path))
 
-    n_inferred = len(loaded_images)
+    n_inferred = len(batch_results)
     if n_inferred:
         avg_ms = (total_elapsed / n_inferred) * 1000
         print(f"\n--- Inference timing ---")
@@ -364,10 +346,10 @@ def main(input_dir: str, output_dir: str):
     #   "tdla"       - TDLA YOLO26 (Tibetan Document Layout Analysis, 4 classes)
     #   "ensemble"   - Both detectors, merge results (best recall)
     #   "cascade"    - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "surya2"
+    detector_type = "tdla"
     
     # Device: "cpu" or "cuda" (for GPU)
-    device = "cuda"
+    device = "cpu"
     
     # Confidence threshold (0.0 - 1.0)
     confidence = 0.3
@@ -380,6 +362,9 @@ def main(input_dir: str, output_dir: str):
 
     # Batch size for detect_batch (higher = more GPU memory, faster throughput)
     batch_size = 8
+
+    # Merge nearby same-class detections during post-processing.
+    merge_nearby_detections = False
     
     # ==========================================================================
 
@@ -393,6 +378,7 @@ def main(input_dir: str, output_dir: str):
         margin=margin,
         output_format=output_format,
         batch_size=batch_size,
+        merge_nearby_detections=merge_nearby_detections,
     )
 
     # Print summary
@@ -410,6 +396,6 @@ def main(input_dir: str, output_dir: str):
 
 
 if __name__ == "__main__":
-    input_dir = './data/test'    # Directory containing input images
-    output_dir = './data/surya2_inference'  # Directory for output images
+    input_dir = './data/benchmark_dataset/images'    # Directory containing input images
+    output_dir = './data/tlda'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)

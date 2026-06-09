@@ -17,14 +17,21 @@ Class ID  Raw name      Normalised HFF label
 ========  ============  ===================
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
+from huggingface_hub import hf_hub_download
 
 from hff_remover.detector._base import BaseHFFDetector
 from hff_remover.detector._eric_yolo import merge_boxes_by_class
+
+logger = logging.getLogger(__name__)
+
+_HF_REPO_ID = "BDRC/Tibetan_Modern_Book_Layout_Detection_Model"
+_HF_MODEL_FILENAME = "Tibetan_modern_book_Layout_detection.pt"
 
 TDLA_CLASS_NAMES: Dict[int, str] = {
     0: "header",
@@ -113,6 +120,8 @@ class TDLADetector(BaseHFFDetector):
 
         Args:
             model_path: Path to the YOLO26-m ``.pt`` weights file.
+                If the file does not exist locally, the model is
+                automatically downloaded from HuggingFace.
             device: Device for inference (``"cuda"`` or ``"cpu"``).
             confidence_threshold: Minimum confidence score for detections.
             merge_margin: Max gap in pixels for merging nearby boxes of
@@ -124,9 +133,44 @@ class TDLADetector(BaseHFFDetector):
         self.confidence_threshold = confidence_threshold
         self.merge_margin = merge_margin
 
-        self.model = YOLO(model_path)
+        resolved_path = self._resolve_model_path(model_path)
+        self.model = YOLO(resolved_path)
         self.model.model.fuse = lambda verbose=True: self.model.model
-        self.model_path = model_path
+        self.model_path = resolved_path
+
+    # ------------------------------------------------------------------
+    # Model resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_model_path(model_path: str) -> str:
+        """Return a valid local path to the model weights.
+
+        If ``model_path`` already points to an existing file it is returned
+        as-is.  Otherwise the weights are downloaded from the HuggingFace
+        Hub repository ``BDRC/Tibetan_Modern_Book_Layout_Detection_Model``.
+
+        Args:
+            model_path: User-supplied path to the ``.pt`` weights file.
+
+        Returns:
+            Absolute path to the (possibly downloaded) model file.
+        """
+        if Path(model_path).is_file():
+            return model_path
+
+        logger.info(
+            "Local model not found at '%s'. "
+            "Downloading from HuggingFace (%s)...",
+            model_path,
+            _HF_REPO_ID,
+        )
+        downloaded_path = hf_hub_download(
+            repo_id=_HF_REPO_ID,
+            filename=_HF_MODEL_FILENAME,
+        )
+        logger.info("Model downloaded to: %s", downloaded_path)
+        return downloaded_path
 
     # ------------------------------------------------------------------
     # Label normalisation
@@ -291,16 +335,21 @@ class TDLADetector(BaseHFFDetector):
         self,
         image: Union[str, Path, np.ndarray],
         image_size: int = 640,
+        merge_boxes: bool = True,
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
         """Detect headers, footers, and footnotes in a full-page image.
 
         The full image is passed directly to the model at ``imgsz``.
-        Nearby boxes of the same class are merged before returning.
+        Nearby boxes of the same class are optionally merged before
+        returning.
 
         Args:
             image: Path to an image file or a BGR numpy array.
             image_size: Image size for inference (default ``640``).
+            merge_boxes: If ``True`` (default), merge nearby boxes of
+                the same class.  Set to ``False`` to return raw
+                detections without merging.
             **kwargs: Accepted for API compatibility (e.g.
                 ``normalize_bbox``); ignored by this detector.
 
@@ -310,7 +359,7 @@ class TDLADetector(BaseHFFDetector):
         """
         img = self._load_image(image)
         boxes, scores, classes = self._run_inference(img, imgsz=image_size)
-        if len(boxes) > 0:
+        if merge_boxes and len(boxes) > 0:
             boxes, scores, classes = merge_boxes_by_class(
                 boxes, scores, classes, margin=self.merge_margin,
             )
@@ -321,6 +370,7 @@ class TDLADetector(BaseHFFDetector):
         images: List[Union[str, Path, np.ndarray]],
         image_size: int = 640,
         batch_size: int = 8,
+        merge_boxes: bool = True,
         **kwargs: Any,
     ) -> List[List[Dict[str, Any]]]:
         """Detect headers, footers, and footnotes in multiple images.
@@ -333,6 +383,9 @@ class TDLADetector(BaseHFFDetector):
             images: List of image paths or BGR numpy arrays.
             image_size: Image size for inference.
             batch_size: Number of images per GPU inference call.
+            merge_boxes: If ``True`` (default), merge nearby boxes of
+                the same class.  Set to ``False`` to return raw
+                detections without merging.
             **kwargs: Accepted for API compatibility; ignored.
 
         Returns:
@@ -354,7 +407,7 @@ class TDLADetector(BaseHFFDetector):
 
             for result in results:
                 boxes, scores, classes = self._parse_single_result(result)
-                if len(boxes) > 0:
+                if merge_boxes and len(boxes) > 0:
                     boxes, scores, classes = merge_boxes_by_class(
                         boxes, scores, classes, margin=self.merge_margin,
                     )
@@ -372,6 +425,7 @@ class TDLADetector(BaseHFFDetector):
         self,
         image: Union[str, Path, np.ndarray],
         image_size: int = 640,
+        merge_boxes: bool = True,
     ) -> List[Dict[str, Any]]:
         """Return *all* detections (not just HFF).
 
@@ -380,13 +434,16 @@ class TDLADetector(BaseHFFDetector):
         Args:
             image: Path to an image file or a BGR numpy array.
             image_size: Image size for inference.
+            merge_boxes: If ``True`` (default), merge nearby boxes of
+                the same class.  Set to ``False`` to return raw
+                detections without merging.
 
         Returns:
             Detection dicts for all four model classes.
         """
         img = self._load_image(image)
         boxes, scores, classes = self._run_inference(img, imgsz=image_size)
-        if len(boxes) > 0:
+        if merge_boxes and len(boxes) > 0:
             boxes, scores, classes = merge_boxes_by_class(
                 boxes, scores, classes, margin=self.merge_margin,
             )
