@@ -1,4 +1,4 @@
-"""Image processor for merging detections, masking regions, and writing inference data."""
+"""Image processor for masking regions and writing inference data."""
 
 from __future__ import annotations
 
@@ -32,15 +32,25 @@ def _to_xyxy(bbox: list) -> List[float]:
 
 
 class HFFProcessor:
-    """Processor for merging nearby detections of the same class."""
+    """Processor for HFF detection post-processing.
+
+    Provides an optional ``merge_nearby_detections`` step that merges
+    overlapping or close bounding boxes of the same class.  This is a
+    post-processing step independent of any detector — call it after
+    detection when you need it.
+    """
 
     def __init__(self, margin: int = 0):
         """Initialize the HFF processor.
 
         Args:
-            margin: Extra pixels to add around detected regions when merging.
+            margin: Extra pixels to add around detected regions.
         """
         self.margin = margin
+
+    # ------------------------------------------------------------------
+    # Nearby-box merging (optional post-processing)
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _boxes_are_nearby(
@@ -48,32 +58,13 @@ class HFFProcessor:
         b: List[float],
         margin: int,
     ) -> bool:
-        """Check whether two [x1,y1,x2,y2] boxes overlap or are within *margin* px.
-
-        Args:
-            a: First bounding box as [x1, y1, x2, y2].
-            b: Second bounding box as [x1, y1, x2, y2].
-            margin: Maximum gap (in pixels) to still consider boxes "nearby".
-
-        Returns:
-            True if the boxes overlap or the gap between them is ≤ margin.
-        """
+        """Check whether two ``[x1, y1, x2, y2]`` boxes overlap or are within *margin* px."""
         return not (
             a[2] + margin < b[0]
             or b[2] + margin < a[0]
             or a[3] + margin < b[1]
             or b[3] + margin < a[1]
         )
-
-    @staticmethod
-    def _merge_two_boxes(a: List[float], b: List[float]) -> List[float]:
-        """Return the union bounding box of *a* and *b*."""
-        return [
-            min(a[0], b[0]),
-            min(a[1], b[1]),
-            max(a[2], b[2]),
-            max(a[3], b[3]),
-        ]
 
     @staticmethod
     def _merge_pass(
@@ -85,7 +76,7 @@ class HFFProcessor:
         """Run one merge pass over *boxes*, mutating the lists in-place.
 
         Returns:
-            True if at least one merge happened (caller should re-run).
+            ``True`` if at least one merge happened (caller should re-run).
         """
         changed = False
         i = 0
@@ -93,7 +84,12 @@ class HFFProcessor:
             j = i + 1
             while j < len(boxes):
                 if HFFProcessor._boxes_are_nearby(boxes[i], boxes[j], margin):
-                    boxes[i] = HFFProcessor._merge_two_boxes(boxes[i], boxes[j])
+                    boxes[i] = [
+                        min(boxes[i][0], boxes[j][0]),
+                        min(boxes[i][1], boxes[j][1]),
+                        max(boxes[i][2], boxes[j][2]),
+                        max(boxes[i][3], boxes[j][3]),
+                    ]
                     confs[i] = max(confs[i], confs[j])
                     boxes.pop(j)
                     confs.pop(j)
@@ -111,10 +107,9 @@ class HFFProcessor:
     ) -> List[Dict[str, Any]]:
         """Merge bounding boxes of the same class that are nearby.
 
-        Iteratively merges boxes of the same ``class_name`` whose gap is
-        within *margin* pixels until no more merges are possible.  The
-        resulting detection keeps the **maximum** confidence of the merged
-        group and inherits the ``class_id`` of the first box in the group.
+        This is an **optional** post-processing step — detectors do not
+        perform merging internally.  Call this after detection when you
+        want to consolidate overlapping or close boxes.
 
         Args:
             detections: List of detection dicts (``bbox``, ``class_name``,
@@ -128,7 +123,6 @@ class HFFProcessor:
         """
         effective_margin = self.margin if margin is None else margin
 
-        # Group detections by class_name
         groups: Dict[str, List[Dict[str, Any]]] = {}
         for det in detections:
             class_name = det.get("class_name", "")
@@ -141,7 +135,6 @@ class HFFProcessor:
             confs: List[float] = [d.get("confidence", 1.0) for d in class_dets]
             class_ids: List[Any] = [d.get("class_id") for d in class_dets]
 
-            # Iteratively merge until stable
             while self._merge_pass(boxes, confs, class_ids, effective_margin):
                 continue
 
