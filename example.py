@@ -2,10 +2,11 @@
 Example script to remove headers, footers, and footnotes from images in a directory.
 
 Supports multiple detector backends:
-- DocLayout-YOLO (default)
+- DocLayout-YOLO fine-tuned (default, TDLA)
+- TDLA YOLO – Tibetan Document Layout Analysis (YOLO26-m)
+- Eric-YOLO – tiled YOLO11-nano (640×640 tile-based inference)
 - PP-DocLayout-L (PaddlePaddle)
 - Surya Layout
-- Ensemble (both detectors combined)
 
 Usage:
     python example.py
@@ -32,19 +33,21 @@ os.environ['PADDLE_USE_PIR'] = '0'
 import paddle
 paddle.set_device('cpu')
 
+import inspect
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Union
+
+import numpy as np
 
 from tqdm import tqdm
 
 from hff_remover.detector import (
-    HFFDetector,
+    YoloDetector,
+    TDLA_CONFIG,
+    ERIC_YOLO_CONFIG,
     PPDocLayoutDetector,
-    Yolo11DocLayoutDetector,
     SuryaLayoutDetector,
-    EricYoloDetector,
-    EnsembleDetector,
     BaseHFFDetector,
 )
 from hff_remover.processor import (
@@ -78,79 +81,85 @@ def create_inference_writers(
     return writers
 
 
+def detect_pixel_space(
+    detector: BaseHFFDetector,
+    image: Union[str, Path, np.ndarray],
+) -> List[Dict[str, Any]]:
+    """Run detection, returning bboxes in pixel coordinates.
+
+    Some detectors (e.g. Surya, TMB-DLA) expose a ``normalize_bbox``
+    parameter and return normalized ``[0, 1]`` coordinates by default;
+    these are asked for pixel coordinates explicitly. Detectors without
+    that parameter already return pixel coordinates.
+
+    Args:
+        detector: The detector to run.
+        image: Path to an image file or a BGR numpy array.
+
+    Returns:
+        The list of detection dictionaries produced by the detector.
+    """
+    if "normalize_bbox" in inspect.signature(detector.detect).parameters:
+        return detector.detect(image, normalize_bbox=False)
+    return detector.detect(image)
+
+
 def create_detector(
-    detector_type: str = "yolo",
+    detector_type: str = "docyolo",
     device: str = "cpu",
     confidence: float = 0.5,
 ) -> BaseHFFDetector:
-    """
-    Create a detector based on the specified type.
+    """Create a detector based on the specified type.
 
     Args:
-        detector_type: Type of detector
-            ('yolo', 'yolo11', 'paddle', 'ensemble', 'cascade', 'surya', 'eric_yolo').
-        device: Device for inference ('cuda' or 'cpu').
+        detector_type: Type of detector.  One of:
+            ``"docyolo"`` – DocLayout-YOLO fine-tuned (4-class, imgsz 640),
+            ``"tdla"`` – TDLA YOLO26-m (header/text-area/footnote/footer),
+            ``"eric_yolo"`` – tiled YOLO11-nano (640×640 tiles),
+            ``"paddle"`` – PP-DocLayout-L (PaddlePaddle, 23 classes),
+            ``"surya"`` – Surya Layout (string-label based).
+        device: Device for inference (``"cuda"`` or ``"cpu"``).
         confidence: Minimum confidence threshold.
 
     Returns:
         Detector instance.
+
+    Raises:
+        ValueError: If *detector_type* is not recognised.
     """
-    if detector_type == "yolo":
-        print("Using DocLayout-YOLO detector")
-        return HFFDetector(
+    if detector_type == "docyolo":
+        print("Using DocLayout-YOLO fine-tuned detector (4-class, imgsz=640)")
+        return YoloDetector(
+            model_path="data/DocLayout-ft.pt",
+            config=TDLA_CONFIG,
             device=device,
             confidence_threshold=confidence,
         )
 
-    elif detector_type == "yolo11":
-        print("Using YOLO11 Document Layout detector (nano)")
-        return Yolo11DocLayoutDetector(
-            model_variant="nano",
+    elif detector_type == "tdla":
+        print("Using TDLA YOLO26 detector (header/text-area/footnote/footer)")
+        return YoloDetector(
+            model_path="data/TDLA-v10.pt",
+            config=TDLA_CONFIG,
+            device=device,
+            confidence_threshold=confidence,
+        )
+
+    elif detector_type == "eric_yolo":
+        print("Using Eric's tiled YOLO11-nano HFF detector")
+        return YoloDetector(
+            model_path="data/eric_yolo.pt",
+            config=ERIC_YOLO_CONFIG,
             device=device,
             confidence_threshold=confidence,
         )
 
     elif detector_type == "paddle":
         print("Using PP-DocLayout-L detector (PaddlePaddle)")
-        use_gpu = device == "cuda"
         return PPDocLayoutDetector(
             model_name="PP-DocLayout-L",
             confidence_threshold=confidence,
-            use_gpu=use_gpu,
-        )
-
-    elif detector_type == "ensemble":
-        print("Using Ensemble detector (YOLO + PP-DocLayout-L, union)")
-        yolo = HFFDetector(device=device, confidence_threshold=confidence)
-        paddle = PPDocLayoutDetector(
-            model_name="PP-DocLayout-L",
-            confidence_threshold=confidence,
             use_gpu=(device == "cuda"),
-        )
-        surya = SuryaLayoutDetector(
-            confidence_threshold=confidence,
-        )
-        yolo11 = Yolo11DocLayoutDetector(
-            model_variant="nano",
-            device=device,
-            confidence_threshold=confidence,
-        )
-        return EnsembleDetector(
-            detectors=[yolo, paddle, surya, yolo11],
-            merge_strategy="union",
-        )
-
-    elif detector_type == "cascade":
-        print("Using Cascade detector (YOLO first, PP-DocLayout-L as fallback)")
-        yolo = HFFDetector(device=device, confidence_threshold=confidence)
-        paddle = PPDocLayoutDetector(
-            model_name="PP-DocLayout-L",
-            confidence_threshold=confidence,
-            use_gpu=(device == "cuda"),
-        )
-        return EnsembleDetector(
-            detectors=[yolo, paddle],
-            merge_strategy="cascade",
         )
 
     elif detector_type == "surya":
@@ -159,38 +168,35 @@ def create_detector(
             confidence_threshold=confidence,
         )
 
-    elif detector_type == "eric_yolo":
-        print("Using Eric's tiled YOLO11-nano HFF detector")
-        return EricYoloDetector(
-            model_path="data/eric_yolo_hff_best.pt",
-            device=device,
-            confidence_threshold=confidence,
-        )
-
     else:
-        raise ValueError(f"Unknown detector type: {detector_type}")
+        raise ValueError(f"Unknown detector type: {detector_type!r}")
 
 
 def process_directory(
     input_dir: str,
     output_dir: str,
-    detector_type: str = "yolo",
+    detector_type: str = "docyolo",
     device: str = "cpu",
     confidence: float = 0.5,
     margin: int = 0,
+    merge_margin: Optional[int] = None,
     output_format: str = "coco",
     inference_dir: Optional[str] = None,
 ) -> dict:
-    """
-    Process all images in a directory to remove headers, footers, and footnotes.
+    """Process all images in a directory to remove headers, footers, and footnotes.
 
     Args:
         input_dir: Path to input directory containing images.
         output_dir: Path to output directory for processed images.
-        detector_type: Type of detector ('yolo', 'paddle', 'ensemble', 'cascade', 'surya', 'eric_yolo').
+        detector_type: Type of detector (``"docyolo"``, ``"tdla"``,
+            ``"eric_yolo"``, ``"paddle"``, ``"surya"``).
         device: Device for inference ('cuda' or 'cpu').
         confidence: Minimum confidence threshold for detections.
         margin: Extra pixels to add around detected regions.
+        merge_margin: If set, merge nearby same-class boxes whose gap
+            is within this many pixels.  ``None`` disables merging.
+        output_format: One of ``"coco"``, ``"masked"``, or ``"both"``.
+        inference_dir: Override output directory for inference data.
 
     Returns:
         Dictionary with processing statistics.
@@ -198,10 +204,8 @@ def process_directory(
     input_path = Path(input_dir)
     output_path = Path(output_dir)
 
-    # Create output directory if it doesn't exist
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Find all images in input directory
     print(f"Scanning for images in: {input_path}")
     images = find_images(input_path, recursive=True)
     print(f"Found {len(images)} images")
@@ -210,11 +214,9 @@ def process_directory(
         print("No images found!")
         return {"processed": 0, "failed": 0, "total_detections": 0}
 
-    # Initialize detector
     print(f"Loading model on {device}...")
     detector = create_detector(detector_type, device, confidence)
 
-    # Default: keep inference output in the same directory as processed output
     inference_dir = inference_dir or output_dir
 
     output_format = (output_format or "").lower().strip()
@@ -226,7 +228,6 @@ def process_directory(
     writers = create_inference_writers(output_format, inference_dir, margin=margin)
     print("Model loaded successfully!")
 
-    # Process statistics
     stats = {
         "processed": 0,
         "failed": 0,
@@ -235,19 +236,20 @@ def process_directory(
         "failed_files": [],
     }
 
-    # Process each image with progress bar
     print("\nProcessing images...")
     for image_path in tqdm(images, desc="Processing"):
         try:
-            # Load image
             image = load_image(image_path)
 
-            # Detect HFF regions
-            detections = detector.detect(image, normalize_bbox=False)
-            detections = processor.merge_nearby_detections(detections)
+            detections = detect_pixel_space(detector, image)
+
+            if merge_margin is not None:
+                detections = processor.merge_nearby_detections(
+                    detections, margin=merge_margin,
+                )
+
             stats["total_detections"] += len(detections)
 
-            # Write inference output (each writer handles its own format)
             for writer in writers:
                 try:
                     writer.write_sample(
@@ -284,14 +286,12 @@ def main(input_dir: str, output_dir: str):
     # ==========================================================================
     
     # Detector type options:
-    #   "yolo"     - DocLayout-YOLO (fast, good general performance)
-    #   "yolo11"   - YOLO11 DocLayout (explicit header/footer/footnote classes)
-    #   "paddle"   - PP-DocLayout-L (higher precision, 23 classes)
+    #   "docyolo"    - DocLayout-YOLO fine-tuned (4-class, imgsz=640)
+    #   "tdla"       - TDLA YOLO26-m (header/text-area/footnote/footer)
+    #   "eric_yolo"  - Eric's tiled YOLO11-nano (640×640 tile-based inference)
+    #   "paddle"     - PP-DocLayout-L (PaddlePaddle, higher precision, 23 classes)
     #   "surya"      - Surya Layout (string-label based layout analysis)
-    #   "eric_yolo"  - Eric's tiled YOLO11-nano (640x640 tile-based inference)
-    #   "ensemble"   - Both detectors, merge results (best recall)
-    #   "cascade"    - Try YOLO first, use Paddle as fallback if no detections
-    detector_type = "surya"
+    detector_type = "paddle"
     
     # Device: "cpu" or "cuda" (for GPU)
     device = "cpu"
@@ -300,7 +300,12 @@ def main(input_dir: str, output_dir: str):
     confidence = 0.3
     
     # Margin around detected regions in pixels
-    margin = 200
+    margin = 0
+
+    # Merge nearby same-class boxes (post-processing).
+    # Set to an int (e.g. 20) to merge boxes within that pixel gap,
+    # or None to disable merging entirely.
+    merge_margin = None
 
     # Save inference as COCO dataset
     output_format = "coco"
@@ -315,6 +320,7 @@ def main(input_dir: str, output_dir: str):
         device=device,
         confidence=confidence,
         margin=margin,
+        merge_margin=merge_margin,
         output_format=output_format,
     )
 
@@ -334,5 +340,5 @@ def main(input_dir: str, output_dir: str):
 
 if __name__ == "__main__":
     input_dir = './data/benchmark_dataset/images'    # Directory containing input images
-    output_dir = './data/eric_yolo_inference'  # Directory for output images
+    output_dir = './data/paddle_new_benchmark'  # Directory for output images
     main(input_dir=input_dir, output_dir=output_dir)

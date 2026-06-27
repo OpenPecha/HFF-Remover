@@ -3,6 +3,7 @@
 __version__ = "0.1.0"
 
 from hff_remover.detector import (
+    YoloDetector,
     HFFDetector,
     PPDocLayoutDetector,
     EnsembleDetector,
@@ -13,6 +14,7 @@ from hff_remover.batch import BatchProcessor
 from hff_remover.evaluate import evaluate, EvaluationResult
 
 __all__ = [
+    "YoloDetector",
     "HFFDetector",
     "PPDocLayoutDetector",
     "EnsembleDetector",
